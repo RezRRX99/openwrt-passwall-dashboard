@@ -137,7 +137,7 @@ say 'Dashboard installed.'
 say "Open: http://$ip/dash/"
 say "Login: the router's root password."
 say 'The Android app is in the dashboard Settings.'
-say 'Kill switch, ad blocking and WebRTC protection are off until you turn them on there.'
+say 'A new install keeps the kill switch, ad blocking and WebRTC protection off until you turn them on there. An update keeps your settings.'
 }
 
 main "$@"
