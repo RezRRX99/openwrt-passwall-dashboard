@@ -1,14 +1,8 @@
 # OpenWrt PassWall Dashboard
 
-[فارسی](README.fa.md)
+**English** | [فارسی](README.fa.md)
 
 A small bilingual (Persian and English) web dashboard for PassWall2 on OpenWrt. It is a static page plus POSIX shell CGI scripts, so it needs no Node or Python on the router.
-
-<div dir="rtl">
-
-یک داشبورد وب کوچک و دوزبانه (فارسی و انگلیسی) برای PassWall2 روی OpenWrt. این پروژه یک صفحهٔ ایستا به‌همراه اسکریپت‌های CGI از نوع شل POSIX است، پس روی روتر به Node یا Python نیازی نیست.
-
-</div>
 
 <p align="center">
   <img src="docs/screenshots/home-dark.png" width="48%" alt="Home screen, dark theme">
@@ -119,29 +113,9 @@ Wallet address:
 
 This address works on Ethereum and compatible networks, including Arbitrum, Optimism, Base and Polygon. You can send ETH, USDT or USDC.
 
-Do not send to it from incompatible networks such as Tron (TRC20) or Bitcoin, because the funds would be lost. Check the address and the network before sending. Donations are entirely voluntary and cannot be refunded.
+Do not send to it from incompatible networks such as Tron (TRC20) or Bitcoin, because the funds would be lost. Check the address and the network before sending.
 
-<div dir="rtl">
-
-ما یک تیم هستیم و دغدغهٔ اصلی‌مان امنیت است. در این شرایط سخت، حمایت شما می‌تواند باعث شود من و تیمم زنده بمانیم و بتوانیم کسب‌وکارمان را رشد بدهیم.
-
-می‌خواهیم ضمن کمک به حفظ امنیت، آزادی اطلاعات و اینترنت برای کاربران ایرانی و تمام دنیا، پیش از آنکه هوش مصنوعی بیش از حد پیشرفته شود و کامپیوترهای کوانتومی از راه برسند، برای مسائل امنیتی و حفظ حریم خصوصی کاربران ایرانی راه‌حلی مطمئن پیدا کنیم.
-
-پس کمک شما می‌تواند کمکی به آیندهٔ امنیت در دنیا باشد.
-
-**زنده باد آزادی.**
-
-آدرس کیف پول:
-
-```
-0xc4192247B7A35BD8601Ef4813912f5A70580eb53
-```
-
-این آدرس روی اتریوم و شبکه‌های سازگار با آن کار می‌کند، از جمله Arbitrum، Optimism، Base و Polygon. می‌توانید ETH، USDT یا USDC بفرستید.
-
-از شبکه‌های ناسازگار مثل Tron (TRC20) یا بیت‌کوین به این آدرس نفرستید، چون پول از دست می‌رود. پیش از ارسال، آدرس و شبکه را دوباره بررسی کنید. حمایت مالی کاملاً اختیاری و غیرقابل بازگشت است.
-
-</div>
+Supporting me and my team is entirely optional. Any commercial or non-commercial use of this repository is free, and I hope you find it useful.
 
 ## License
 
