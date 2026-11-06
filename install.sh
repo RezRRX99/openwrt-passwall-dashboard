@@ -2,7 +2,7 @@
 # Installs or updates the dashboard. Safe to run again: running it again is the update command.
 #
 #   sh install.sh                      from a checkout of the repository
-#   wget -qO- URL/install.sh | sh      (or curl -fsSL URL/install.sh | sh)
+#   curl -fsSL URL/install.sh | sh     see the README for the command that uses PassWall
 #
 # It never starts, stops or restarts PassWall, the network, the firewall or Wi-Fi.
 
@@ -80,7 +80,11 @@ fi
 if [ -z "$SRC" ]; then
 	TMP=$(mktemp -d /tmp/dash-install.XXXXXX) || die 'cannot create a temporary folder.'
 	say "Downloading $REPO ($BRANCH)..."
-	curl -fsSL "https://github.com/$REPO/archive/refs/heads/$BRANCH.tar.gz" -o "$TMP/src.tar.gz" ||
+	# Many lines cannot reach GitHub directly, so the download goes through PassWall when it is up.
+	port=$(uci -q get 'passwall2.@global[0].node_socks_port')
+	proxy=socks5h://127.0.0.1:${port:-1070}
+	curl -s -m 15 -o /dev/null -x "$proxy" https://github.com/ || proxy=
+	curl -fsSL --connect-timeout 20 -m 300 ${proxy:+-x "$proxy"} "https://github.com/$REPO/archive/refs/heads/$BRANCH.tar.gz" -o "$TMP/src.tar.gz" ||
 		die 'download failed.'
 	mkdir "$TMP/x" || die 'cannot create a temporary folder.'
 	tar -xzf "$TMP/src.tar.gz" -C "$TMP/x" || die 'cannot extract the download.'

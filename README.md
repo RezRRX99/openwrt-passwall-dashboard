@@ -43,8 +43,10 @@ A small bilingual (Persian and English) web dashboard for PassWall2 on OpenWrt. 
 Run this over SSH on the router:
 
 ```sh
-wget -O- https://raw.githubusercontent.com/RezRRX99/openwrt-passwall-dashboard/main/install.sh | sh
+curl -fsSL -m 60 -x socks5h://127.0.0.1:$(uci -q get 'passwall2.@global[0].node_socks_port' || echo 1070) https://raw.githubusercontent.com/RezRRX99/openwrt-passwall-dashboard/main/install.sh | sh
 ```
+
+This goes through PassWall, because many internet lines, including those in Iran, cannot reach GitHub directly. PassWall must be connected. If your router reaches GitHub without it, remove `-x socks5h://...` and the port from the command.
 
 Then open `http://192.168.1.1/dash/` (use your router address) from a device on the LAN.
 
@@ -55,7 +57,7 @@ Run the install command again. It also works as the update command.
 ## Uninstall
 
 ```sh
-wget -O- https://raw.githubusercontent.com/RezRRX99/openwrt-passwall-dashboard/main/uninstall.sh | sh
+curl -fsSL -m 60 -x socks5h://127.0.0.1:$(uci -q get 'passwall2.@global[0].node_socks_port' || echo 1070) https://raw.githubusercontent.com/RezRRX99/openwrt-passwall-dashboard/main/uninstall.sh | sh
 ```
 
 ## First steps
