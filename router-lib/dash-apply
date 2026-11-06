@@ -1,0 +1,84 @@
+#!/bin/sh
+# dash-apply: applies PassWall changes in the background and records the result.
+#
+#   dash-apply restart [previous-node]   restart; if traffic fails, return to previous-node
+#   dash-apply stop                      stop the core
+#
+# Result goes to /tmp/dash-apply.state: working, ok, reverted or failed.
+#
+# Turning PassWall on passes no previous node on purpose. Falling back to "off" without
+# being asked would send every client out through the bare ISP line, which is a leak.
+
+. /usr/lib/dash/dash-lib.sh
+
+STATE=/tmp/dash-apply.state
+PROBE_URL='http://www.gstatic.com/generate_204'
+PROBE_ATTEMPTS=5
+PROBE_DELAY=4
+
+# Waits its turn, so an "off" pressed during a restart still happens.
+mkdir -p /tmp/lock
+exec 9>/tmp/lock/dash-apply.lock
+flock 9
+
+# Services must not inherit fd 9: a long-lived xray would hold this lock forever and
+# every later command would wait on it.
+service_passwall() {
+	/etc/init.d/passwall2 "$1" 9>&-
+}
+
+set_state() {
+	echo "$1" > "$STATE"
+	logger -t dash "apply: $1 ${2:-}"
+}
+
+# Proves real traffic through the node. A running process alone proves nothing.
+traffic_ok() {
+	dash_core_running || return 1
+	port=$(uci -q get passwall2.@global[0].node_socks_port)
+	port=${port:-1070}
+	netstat -lnt 2>/dev/null | grep -q ":$port " || return 0
+	code=$(curl -x "socks5h://127.0.0.1:$port" -m 6 -so /dev/null -w '%{http_code}' "$PROBE_URL")
+	[ "$code" = 204 ]
+}
+
+wait_for_traffic() {
+	i=0
+	while [ "$i" -lt "$PROBE_ATTEMPTS" ]; do
+		sleep "$PROBE_DELAY"
+		traffic_ok && return 0
+		i=$((i + 1))
+	done
+	return 1
+}
+
+set_state working "$1"
+case "$1" in
+	stop)
+		service_passwall stop
+		/usr/lib/dash/dash-ks apply
+		set_state ok stopped
+		;;
+	restart)
+		previous=$2
+		# Before the restart, so the kill switch covers the moment PassWall comes back up.
+		/usr/lib/dash/dash-ks apply
+		service_passwall restart
+		# PassWall's start can abort itself and report nothing. See dash-guard.
+		sleep 2
+		dash_core_running || service_passwall restart
+		if wait_for_traffic; then
+			set_state ok restarted
+		elif [ -n "$previous" ]; then
+			uci set "passwall2.@global[0].node=$previous"
+			uci commit passwall2
+			service_passwall restart
+			set_state reverted "$previous"
+		else
+			set_state failed 'no traffic after restart'
+		fi
+		;;
+	*)
+		set_state failed "unknown command $1"
+		;;
+esac

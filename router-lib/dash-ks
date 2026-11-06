@@ -1,0 +1,135 @@
+#!/bin/sh
+# dash-ks: kill switch. Stops LAN clients leaking out of the ISP line when PassWall is down.
+#
+#   dash-ks apply    arm or disarm to match the settings
+#   dash-ks ir       rebuild the Iran IP list from PassWall's geoip.dat
+#
+# PassWall sends all client TCP and UDP to its own port with TPROXY, so healthy proxied
+# traffic never reaches the forward hook. That makes a permanent rule safe: it does nothing
+# while PassWall works, and catches traffic the moment PassWall's rules are gone. There is
+# no polling, so there is no window. It lives in its own table and changes nothing else.
+#
+# Armed while PassWall's main switch is on. Switching PassWall off on purpose means "go direct",
+# and the dashboard asks before doing that. The exception is the WebRTC button: it promises to
+# keep the real IP hidden, so while it is on this stays armed whatever else is set.
+#
+# Every way out of the LAN counts, so a PPPoE or USB line is covered too. Modes: smart lets
+# Iranian destinations through, strict does not. Both allow private addresses (an upstream
+# modem) and ICMP (ping). Router traffic such as subscription updates
+# is not forwarded, so it is not affected.
+#
+# PassWall lets client UDP 53 pass untouched, so a device with a fixed DNS server such as
+# 8.8.8.8 would ask it in the clear over the ISP line. While armed, all client DNS is
+# redirected to the router, which sends it through the proxy. Those devices keep working.
+
+IR_FILE=/etc/dash/ir.cidr
+GEOIP=/usr/share/v2ray/geoip.dat
+TABLE='inet dash_ks'
+RULES=/tmp/dash-ks.nft
+
+build_ir_list() {
+	mkdir -p /etc/dash
+	geoview -type geoip -action extract -input "$GEOIP" -list ir -ipv4 -output "$IR_FILE.new" >/dev/null 2>&1
+	[ -s "$IR_FILE.new" ] && mv "$IR_FILE.new" "$IR_FILE"
+	rm -f "$IR_FILE.new"
+}
+
+disarm() {
+	nft delete table $TABLE 2>/dev/null
+	return 0
+}
+
+write_rules() {
+	# Declaring the table first lets the delete succeed on the first run, and the whole
+	# file is one transaction, so the rules are never missing during a change.
+	cat > "$RULES" <<-EOF
+	table $TABLE
+	delete table $TABLE
+	table $TABLE {
+	EOF
+
+	if [ "$1" = smart ]; then
+		{
+			echo '	set ir { type ipv4_addr; flags interval; auto-merge; elements = {'
+			# geoview also returns IPv6 ranges, which this IPv4 set cannot hold.
+			grep -E '^[0-9]+\.' "$IR_FILE" | tr '\n' ',' | sed 's/,$//'
+			echo '	} }'
+		} >> "$RULES"
+	fi
+
+	cat >> "$RULES" <<-EOF
+	chain dns {
+		type nat hook prerouting priority dstnat - 5; policy accept;
+		iifname "br-lan" udp dport 53 counter redirect to :53
+		iifname "br-lan" tcp dport 53 counter redirect to :53
+	}
+	chain forward {
+		type filter hook forward priority filter - 5; policy accept;
+		iifname != "br-lan" return
+		oifname "br-lan" return
+		ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } accept
+		ip protocol icmp accept
+	EOF
+
+	[ "$1" = smart ] && echo '		ip daddr @ir accept' >> "$RULES"
+
+	cat >> "$RULES" <<-EOF
+		meta l4proto tcp counter reject with tcp reset
+		counter reject with icmpx admin-prohibited
+	}
+	}
+	EOF
+}
+
+load_rules() {
+	nft -c -f "$RULES" && nft -f "$RULES"
+	status=$?
+	rm -f "$RULES"
+	return "$status"
+}
+
+arm() {
+	mode=$(uci -q get dash.ks.mode)
+	mode=${mode:-smart}
+
+	if [ "$mode" = smart ]; then
+		[ -s "$IR_FILE" ] || build_ir_list
+		# Without the list, blocking everything is the safe failure.
+		[ -s "$IR_FILE" ] || mode=strict
+	fi
+
+	write_rules "$mode"
+	if load_rules; then
+		logger -t dash "kill switch armed: $mode"
+		return 0
+	fi
+
+	# A kill switch that fails open is worse than none, so never stay unprotected.
+	logger -t dash "kill switch: $mode failed to load, falling back to strict"
+	write_rules strict
+	load_rules
+	return 1
+}
+
+wanted() {
+	[ "$(uci -q get dash.rtc.enabled)" = 1 ] && return 0
+	[ "$(uci -q get dash.ks.enabled)" = 1 ] && [ "$(uci -q get passwall2.@global[0].enabled)" = 1 ]
+}
+
+case "$1" in
+	apply)
+		if wanted; then
+			arm
+		else
+			disarm
+		fi
+		;;
+	ir)
+		build_ir_list
+		wc -l < "$IR_FILE"
+		;;
+	*)
+		echo "usage: $0 apply|ir" >&2
+		exit 1
+		;;
+esac

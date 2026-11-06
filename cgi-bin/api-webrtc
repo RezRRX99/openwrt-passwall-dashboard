@@ -1,0 +1,32 @@
+#!/bin/sh
+# api-webrtc: hiding the real IP and IPv6, on or off. Requires a session.
+#
+# GET  /cgi-bin/api-webrtc
+# POST /cgi-bin/api-webrtc   {"enabled":true}
+#
+# active is the real firewall state, not just the saved setting.
+
+. /usr/lib/dash/dash-lib.sh
+dash_require_session
+
+if [ "$REQUEST_METHOD" = POST ]; then
+	dash_read_body
+	case "$(dash_field enabled)" in
+		true) enabled=1 ;;
+		false) enabled=0 ;;
+		*) dash_fail bad_action ;;
+	esac
+
+	[ -f /etc/config/dash ] || touch /etc/config/dash
+	uci set dash.rtc=rtc
+	uci set "dash.rtc.enabled=$enabled"
+	uci commit dash
+	/usr/lib/dash/dash-rtc apply || dash_fail webrtc_failed '500 Internal Server Error'
+	/usr/lib/dash/dash-ks apply || dash_fail killswitch_failed '500 Internal Server Error'
+fi
+
+json_init
+json_add_boolean ok 1
+if [ "$(uci -q get dash.rtc.enabled)" = 1 ]; then json_add_boolean enabled 1; else json_add_boolean enabled 0; fi
+if nft list tables 2>/dev/null | grep -q dash_rtc; then json_add_boolean active 1; else json_add_boolean active 0; fi
+dash_send

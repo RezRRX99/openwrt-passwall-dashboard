@@ -1,0 +1,62 @@
+#!/bin/sh
+# api-wifi: Wi-Fi names and passwords. Requires a session.
+#
+# GET  /cgi-bin/api-wifi
+# POST /cgi-bin/api-wifi   {"id":"<section>","ssid":"Name","key":"password"}
+#
+# Passwords are write-only. An empty key keeps the current one. The radio reloads a few
+# seconds after the reply, because reloading drops every client, including this request.
+
+. /usr/lib/dash/dash-lib.sh
+dash_require_session
+
+is_iface() {
+	dash_valid_id "$1" && [ "$(uci -q get "wireless.$1")" = wifi-iface ]
+}
+
+if [ "$REQUEST_METHOD" = POST ]; then
+	dash_read_body
+	id=$(dash_field id)
+	ssid=$(dash_field ssid)
+	key=$(dash_field key)
+
+	is_iface "$id" || dash_fail bad_id
+	[ -n "$ssid" ] && [ "${#ssid}" -le 32 ] || dash_fail bad_ssid
+	if [ -n "$key" ]; then
+		[ "${#key}" -ge 8 ] && [ "${#key}" -le 63 ] || dash_fail bad_key
+	fi
+
+	uci set "wireless.$id.ssid=$ssid"
+	[ -z "$key" ] || uci set "wireless.$id.key=$key"
+	uci commit wireless
+	# One reload covers several saves made back to back, such as "same password everywhere".
+	if [ ! -e /tmp/dash-wifi.pending ]; then
+		touch /tmp/dash-wifi.pending
+		( sleep 3; rm -f /tmp/dash-wifi.pending; wifi reload ) </dev/null >/dev/null 2>&1 &
+	fi
+fi
+
+add_iface() {
+	local id=$1 ssid device network disabled band
+	config_get ssid "$id" ssid
+	config_get device "$id" device
+	config_get network "$id" network
+	config_get disabled "$id" disabled 0
+	band=$(uci -q get "wireless.$device.band")
+
+	json_add_object
+	json_add_string id "$id"
+	json_add_string ssid "$ssid"
+	json_add_string band "$band"
+	json_add_string network "$network"
+	json_add_boolean enabled "$([ "$disabled" = 1 ] && echo 0 || echo 1)"
+	json_close_object
+}
+
+config_load wireless
+json_init
+json_add_boolean ok 1
+json_add_array networks
+config_foreach add_iface wifi-iface
+json_close_array
+dash_send

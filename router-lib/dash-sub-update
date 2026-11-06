@@ -1,0 +1,31 @@
+#!/bin/sh
+# dash-sub-update: runs PassWall's subscription update with a time limit.
+#
+#   dash-sub-update <section|all>
+#
+# PassWall's curl has no overall timeout. When a download stalls, it would hang forever and block every other change. Result
+# goes to /tmp/dash-sub.state: running, ok or timeout. New servers join auto mode through
+# dash-guard within a minute.
+
+. /usr/lib/dash/dash-lib.sh
+
+STATE=/tmp/dash-sub.state
+LIMIT_SECONDS=150
+
+echo running > "$STATE"
+lua /usr/share/passwall2/subscribe.lua start "$1" manual </dev/null >/dev/null 2>&1 &
+lua_pid=$!
+
+elapsed=0
+while kill -0 "$lua_pid" 2>/dev/null; do
+	if [ "$elapsed" -ge "$LIMIT_SECONDS" ]; then
+		kill -9 "$lua_pid" $(pgrep -f 'curl -skL -w') 2>/dev/null
+		echo timeout > "$STATE"
+		logger -t dash 'subscription update timed out'
+		exit 0
+	fi
+	sleep 2
+	elapsed=$((elapsed + 2))
+done
+
+echo ok > "$STATE"

@@ -1,0 +1,30 @@
+#!/bin/sh
+# api-toggle: PassWall main switch. Requires a session.
+#
+# POST /cgi-bin/api-toggle   {"action":"on"} or {"action":"off"}
+#
+# "off" sends all clients straight out through the ISP line. Poll api-status for the result.
+
+. /usr/lib/dash/dash-lib.sh
+dash_require_session
+dash_read_body
+
+case "$(dash_field action)" in
+	on)
+		uci set passwall2.@global[0].enabled=1
+		uci commit passwall2
+		dash_apply_async restart
+		;;
+	off)
+		uci set passwall2.@global[0].enabled=0
+		uci commit passwall2
+		dash_apply_async stop
+		;;
+	*)
+		dash_fail bad_action
+		;;
+esac
+
+json_init
+json_add_boolean ok 1
+dash_send

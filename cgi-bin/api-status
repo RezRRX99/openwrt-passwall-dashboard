@@ -1,0 +1,105 @@
+#!/bin/sh
+# api-status: read-only health report.
+#
+# GET /cgi-bin/api-status
+#
+# Returns no secrets (no URLs, UUIDs or passwords), which is why it needs no login.
+#
+# The dashboard calls this every few seconds while it is open, so every process
+# spawned here matters. Prefer /proc to a tool, and
+# one uci call to several.
+
+. /usr/lib/dash/dash-lib.sh
+
+# Anyone on the LAN can call this without logging in, so a flood must stay cheap.
+CACHE=/tmp/dash-status.json
+if [ -f "$CACHE" ] && [ "$(($(date +%s) - $(date -r "$CACHE" +%s)))" -lt 2 ]; then
+	printf 'Status: 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
+	cat "$CACHE"
+	exit 0
+fi
+
+meminfo_kb() {
+	awk -v key="$1:" '$1 == key { print $2; exit }' /proc/meminfo
+}
+
+# Reads one option from uci "show" output held in a variable.
+uci_value() {
+	printf '%s\n' "$1" | sed -n "s/^[^=]*\.$2='\(.*\)'$/\1/p"
+}
+
+global=$(uci -q show passwall2.@global[0])
+enabled=$(uci_value "$global" enabled)
+node_id=$(uci_value "$global" node)
+node=$(uci -q show "passwall2.$node_id")
+
+if dash_core_running; then running=1; else running=0; fi
+
+# "disabled" means the main switch is off. "stopped" means it is on but the core is
+# down, which is a fault the UI should flag.
+if [ "$running" = 1 ]; then
+	state=running
+elif [ "$enabled" = 1 ]; then
+	state=stopped
+else
+	state=disabled
+fi
+
+json_init
+json_add_boolean ok 1
+json_add_int time "$(date +%s)"
+
+json_add_object passwall
+json_add_boolean enabled "${enabled:-0}"
+json_add_boolean running "$running"
+json_add_string state "$state"
+json_add_string last_apply "$(cat /tmp/dash-apply.state 2>/dev/null)"
+json_close_object
+
+json_add_object node
+json_add_string id "$node_id"
+json_add_string name "$(uci_value "$node" remarks)"
+json_add_string protocol "$(uci_value "$node" protocol)"
+json_add_string type "$(uci_value "$node" type)"
+json_close_object
+
+json_add_object adguard
+if pidof AdGuardHome >/dev/null; then json_add_boolean running 1; else json_add_boolean running 0; fi
+# Port 5353 is 14E9 in /proc.
+if grep -q ':14E9 ' /proc/net/udp6 /proc/net/udp 2>/dev/null; then
+	json_add_boolean dns_listening 1
+else
+	json_add_boolean dns_listening 0
+fi
+json_close_object
+
+json_add_object adblock
+if dash_adblock_active; then json_add_boolean active 1; else json_add_boolean active 0; fi
+json_close_object
+
+json_add_object webrtc
+if [ "$(uci -q get dash.rtc.enabled)" = 1 ]; then json_add_boolean enabled 1; else json_add_boolean enabled 0; fi
+json_close_object
+
+json_add_object killswitch
+if dash_ks_armed; then json_add_boolean armed 1; else json_add_boolean armed 0; fi
+json_add_string mode "$(uci -q get dash.ks.mode)"
+json_close_object
+
+# Byte counters as strings: they exceed jshn's integer range. The UI turns them into speed.
+wan_dev=$(uci -q get network.wan.device)
+json_add_object wan
+json_add_string rx_bytes "$(cat "/sys/class/net/${wan_dev:-wan}/statistics/rx_bytes" 2>/dev/null)"
+json_add_string tx_bytes "$(cat "/sys/class/net/${wan_dev:-wan}/statistics/tx_bytes" 2>/dev/null)"
+json_close_object
+
+json_add_object system
+json_add_string hostname "$(cat /proc/sys/kernel/hostname)"
+json_add_int uptime_s "$(cut -d. -f1 /proc/uptime)"
+json_add_int mem_total_kb "$(meminfo_kb MemTotal)"
+json_add_int mem_available_kb "$(meminfo_kb MemAvailable)"
+json_add_string load1 "$(cut -d' ' -f1 /proc/loadavg)"
+json_close_object
+
+json_dump > "$CACHE.$$" && mv "$CACHE.$$" "$CACHE"
+dash_send

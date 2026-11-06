@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="fa" dir="rtl" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#07060C">
+<title>Router</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="mobile-web-app-capable" content="yes">
+<script>
+(function () {
+  var t = 'system', l = false;
+  try { var s = localStorage.getItem('dash_theme'); if (s === 'dark' || s === 'light' || s === 'system') t = s; } catch (e) {}
+  l = t === 'light' || (t === 'system' && !!window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+  document.documentElement.setAttribute('data-theme', l ? 'light' : 'dark');
+  var m = document.querySelector('meta[name="theme-color"]');
+  if (m) m.setAttribute('content', l ? '#DCE6F2' : '#07060C');
+})();
+</script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="bg" aria-hidden="true"></div>
+<div id="app"></div>
+<div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+<noscript><p class="noscript">JavaScript is required. / برای استفاده از این صفحه جاوااسکریپت لازم است.</p></noscript>
+<script src="i18n.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

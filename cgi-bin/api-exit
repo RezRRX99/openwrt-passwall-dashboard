@@ -1,0 +1,24 @@
+#!/bin/sh
+# api-exit: where proxied traffic really comes out. Requires a session.
+#
+# GET /cgi-bin/api-exit   {"ok":true,"ip":"...","country":"DE","reachable":true}
+#
+# Asks through the node's SOCKS port, so it reports the proxy exit, not the ISP line. When
+# the core is down, reachable is false.
+
+. /usr/lib/dash/dash-lib.sh
+dash_require_session
+
+port=$(uci -q get passwall2.@global[0].node_socks_port)
+# Plain HTTP on purpose: it is much faster than TLS through curl. Not 1.1.1.1, which
+# answers HTTP with a redirect and no body.
+trace=$(curl -m 8 -s -x "socks5h://127.0.0.1:${port:-1070}" http://www.cloudflare.com/cdn-cgi/trace 2>/dev/null | tr -d '\r')
+ip=$(printf '%s\n' "$trace" | sed -n 's/^ip=//p')
+country=$(printf '%s\n' "$trace" | sed -n 's/^loc=//p')
+
+json_init
+json_add_boolean ok 1
+if [ -n "$ip" ]; then json_add_boolean reachable 1; else json_add_boolean reachable 0; fi
+json_add_string ip "$ip"
+json_add_string country "$country"
+dash_send

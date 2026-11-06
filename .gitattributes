@@ -1,0 +1,5 @@
+# Router-side files must stay LF or /bin/sh breaks on the router
+* text=auto eol=lf
+*.woff2 binary
+*.png binary
+*.apk binary

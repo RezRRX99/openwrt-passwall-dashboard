@@ -1,0 +1,138 @@
+#!/bin/sh
+# api-sub: manages subscription links. Requires a session.
+#
+# GET  /cgi-bin/api-sub
+# POST /cgi-bin/api-sub  {"action":"add","remark":"X","url":"https://...","allow_insecure":false}
+# POST /cgi-bin/api-sub  {"action":"set_url","id":"<section>","url":"https://..."}
+# POST /cgi-bin/api-sub  {"action":"delete","id":"<section>"}
+#
+# Full URLs are write-only here: they hold an access token, so only the host is returned.
+# add and set_url start an update right away; poll api-sub-update for the end of it.
+# delete also removes the subscription's nodes. If the active node goes with them, the
+# balancer takes over, so PassWall is never left pointing at nothing.
+
+. /usr/lib/dash/dash-lib.sh
+dash_require_session
+
+valid_url() {
+	case "$1" in
+		http://*|https://*) ;;
+		*) return 1 ;;
+	esac
+	case "$1" in
+		*[[:space:]\'\"\`\\]*) return 1 ;;
+	esac
+	[ "${#1}" -le 1024 ]
+}
+
+valid_remark() {
+	[ -n "$1" ] && [ "${#1}" -le 64 ] || return 1
+	case "$1" in
+		*[\'\"\`\\]*) return 1 ;;
+	esac
+	return 0
+}
+
+is_sub() {
+	dash_valid_id "$1" && [ "$(uci -q get "passwall2.$1")" = subscribe_list ]
+}
+
+add_sub() {
+	sid=$(uci add passwall2 subscribe_list)
+	uci set "passwall2.$sid.remark=$1"
+	uci set "passwall2.$sid.url=$2"
+	# The remaining options are the values PassWall uses for a new subscription.
+	uci set "passwall2.$sid.allowInsecure=$3"
+	uci set "passwall2.$sid.filter_keyword_mode=5"
+	for option in ss_type trojan_type vmess_type vless_type hysteria2_type domain_strategy; do
+		uci set "passwall2.$sid.$option=global"
+	done
+	uci set "passwall2.$sid.auto_update=1"
+	uci set "passwall2.$sid.week_update=8"
+	uci set "passwall2.$sid.interval_update=1"
+	uci set "passwall2.$sid.user_agent=v2rayN/9.99"
+}
+
+delete_sub() {
+	sub_remark=$(uci -q get "passwall2.$1.remark")
+	[ -n "$sub_remark" ] && lua /usr/share/passwall2/subscribe.lua truncate "$sub_remark" >/dev/null 2>&1
+	uci delete "passwall2.$1"
+	uci commit passwall2
+
+	fallback=$(dash_balancer_id)
+	[ -n "$fallback" ] || return 0
+
+	# An empty balancer cannot start, so it falls back to every server that is left.
+	[ -n "$(uci -q get "passwall2.$fallback.balancing_node")" ] || dash_pool_add_all "$fallback"
+
+	if [ -z "$(uci -q get passwall2.@global[0].node)" ]; then
+		uci set "passwall2.@global[0].node=$fallback"
+		uci commit passwall2
+		dash_passwall_enabled && dash_apply_async restart
+	fi
+}
+
+update_target=
+if [ "$REQUEST_METHOD" = POST ]; then
+	dash_read_body
+	# Two writers on the PassWall config can silently undo each other's changes.
+	dash_sub_updating && dash_fail updating '409 Conflict'
+	id=$(dash_field id)
+	url=$(dash_field url)
+	remark=$(dash_field remark)
+	case "$(dash_field action)" in
+		add)
+			valid_remark "$remark" || dash_fail bad_remark
+			valid_url "$url" || dash_fail bad_url
+			# Nodes are grouped by remark, so two links must not share one.
+			uci show passwall2 | grep -qF ".remark='$remark'" && dash_fail duplicate_remark
+			# TLS verification stays on unless the request explicitly turns it off.
+			case "$(dash_field allow_insecure)" in
+				true) insecure=1 ;;
+				*) insecure=0 ;;
+			esac
+			add_sub "$remark" "$url" "$insecure"
+			update_target=$sid
+			;;
+		set_url)
+			is_sub "$id" || dash_fail bad_id
+			valid_url "$url" || dash_fail bad_url
+			uci set "passwall2.$id.url=$url"
+			update_target=$id
+			;;
+		delete)
+			is_sub "$id" || dash_fail bad_id
+			delete_sub "$id"
+			;;
+		*)
+			dash_fail bad_action
+			;;
+	esac
+	uci commit passwall2
+	[ -n "$update_target" ] && dash_start_sub_update "$update_target"
+fi
+
+add_entry() {
+	local id=$1 remark url auto interval
+	config_get remark "$id" remark
+	config_get url "$id" url
+	config_get auto "$id" auto_update 0
+	config_get interval "$id" interval_update
+	json_add_object
+	json_add_string id "$id"
+	json_add_string remark "$remark"
+	json_add_string host "$(printf '%s' "$url" | sed -E 's#^https?://##; s#[/?\#].*##; s#^.*@##')"
+	json_add_boolean auto_update "$auto"
+	json_add_string interval_hours "$interval"
+	json_add_int nodes "$(uci show passwall2 | grep -cF ".group='$remark'")"
+	json_close_object
+}
+
+config_load passwall2
+json_init
+json_add_boolean ok 1
+if [ -n "$update_target" ]; then json_add_boolean updating 1; else json_add_boolean updating 0; fi
+json_add_array subscriptions
+config_foreach add_entry subscribe_list
+json_close_array
+dash_send

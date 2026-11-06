@@ -1,0 +1,11 @@
+# Never commit secrets or signing keys
+*.secret
+*.key
+*.jks
+*.pass
+.env
+
+# Build leftovers
+*.idsig
+__pycache__/
+*.pyc

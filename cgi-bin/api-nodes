@@ -1,0 +1,64 @@
+#!/bin/sh
+# api-nodes: lists selectable nodes. Requires a session.
+#
+# GET /cgi-bin/api-nodes
+#
+# kind is "server", "auto" (balancer) or "shunt". Interface pseudo-nodes and empty
+# sections are left out. UUIDs and keys are never returned. manual is true for nodes
+# added by link, which api-node can delete; subscription nodes return on every update.
+
+. /usr/lib/dash/dash-lib.sh
+dash_require_session
+
+add_node() {
+	local id=$1 type protocol remarks group address port kind add_mode
+
+	config_get type "$id" type
+	config_get protocol "$id" protocol
+	[ -n "$type" ] || return 0
+	[ "$protocol" = _iface ] && return 0
+
+	config_get remarks "$id" remarks
+	config_get group "$id" group
+	config_get address "$id" address
+	config_get port "$id" port
+	config_get add_mode "$id" add_mode
+
+	case "$protocol" in
+		_balancing) kind=auto ;;
+		_shunt) kind=shunt ;;
+		*) kind=server ;;
+	esac
+
+	json_add_object
+	json_add_string id "$id"
+	json_add_string name "$remarks"
+	json_add_string kind "$kind"
+	json_add_string type "$type"
+	json_add_string protocol "$protocol"
+	json_add_string group "$group"
+	json_add_string address "$address"
+	json_add_string port "$port"
+	if [ "$kind" = server ] && [ "$add_mode" != 2 ]; then
+		json_add_boolean manual 1
+	else
+		json_add_boolean manual 0
+	fi
+	case " $pool " in
+		*" $id "*) json_add_boolean in_pool 1 ;;
+		*) json_add_boolean in_pool 0 ;;
+	esac
+	json_close_object
+}
+
+active=$(uci -q get passwall2.@global[0].node)
+pool=$(uci show passwall2 | sed -n "s/^passwall2\.[^.]*\.balancing_node=//p" | tr -d "'")
+
+config_load passwall2
+json_init
+json_add_boolean ok 1
+json_add_string active "$active"
+json_add_array nodes
+config_foreach add_node nodes
+json_close_array
+dash_send

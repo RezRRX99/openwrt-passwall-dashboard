@@ -1,0 +1,46 @@
+#!/bin/sh
+# api-killswitch: kill switch settings. Requires a session.
+#
+# GET  /cgi-bin/api-killswitch
+# POST /cgi-bin/api-killswitch   {"enabled":true,"mode":"smart"}
+#
+# mode is smart (Iranian sites stay reachable) or strict (nothing leaves). armed is the real
+# state of the firewall: it stays false while PassWall's main switch is off, because that
+# is a deliberate choice to go direct.
+
+. /usr/lib/dash/dash-lib.sh
+dash_require_session
+
+if [ "$REQUEST_METHOD" = POST ]; then
+	dash_read_body
+
+	case "$(dash_field enabled)" in
+		true) enabled=1 ;;
+		false) enabled=0 ;;
+		*) dash_fail bad_action ;;
+	esac
+	mode=$(dash_field mode)
+	case "$mode" in
+		smart|strict) ;;
+		*) dash_fail bad_action ;;
+	esac
+
+	[ -f /etc/config/dash ] || touch /etc/config/dash
+	uci set dash.ks=killswitch
+	uci set "dash.ks.enabled=$enabled"
+	uci set "dash.ks.mode=$mode"
+	uci commit dash
+	/usr/lib/dash/dash-ks apply || dash_fail killswitch_failed '500 Internal Server Error'
+fi
+
+blocked=$(nft list table inet dash_ks 2>/dev/null | sed -n 's/.*counter packets \([0-9]*\).*/\1/p' |
+	awk '{ total += $1 } END { printf "%d", total }')
+
+json_init
+json_add_boolean ok 1
+if [ "$(uci -q get dash.ks.enabled)" = 1 ]; then json_add_boolean enabled 1; else json_add_boolean enabled 0; fi
+mode=$(uci -q get dash.ks.mode)
+json_add_string mode "${mode:-smart}"
+if dash_ks_armed; then json_add_boolean armed 1; else json_add_boolean armed 0; fi
+json_add_string blocked_packets "${blocked:-0}"
+dash_send

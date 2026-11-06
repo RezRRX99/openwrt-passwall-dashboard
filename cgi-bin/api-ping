@@ -1,0 +1,84 @@
+#!/bin/sh
+# api-ping: node latency. Requires a session.
+#
+# GET /cgi-bin/api-ping                 TCP connect time for every server, in parallel
+# GET /cgi-bin/api-ping?id=X&mode=real  real request through that node
+#
+# TCP only proves the port answers. "real" starts a temporary core through PassWall's own
+# test script, so it is slower and must run one node at a time.
+
+. /usr/lib/dash/dash-lib.sh
+dash_require_session
+
+real_test() {
+	id=$1
+	dash_selectable_node "$id" || dash_fail bad_node
+	# A test core alive during a restart makes PassWall's start abort itself.
+	dash_apply_running && dash_fail busy '409 Conflict'
+	# Stopping PassWall deletes this folder, and every test would then fail silently.
+	mkdir -p /tmp/etc/passwall2/bin
+	result=$(/usr/share/passwall2/test.sh url_test_node "$id" urltest_node)
+	code=${result%%:*}
+	used=${result#*:}
+	json_init
+	json_add_boolean ok 1
+	json_add_string id "$id"
+	json_add_string mode real
+	# Same units as LuCI: a dot means seconds, otherwise microseconds.
+	# A failed test reports code 000, so compare as a number.
+	if [ "${code:-0}" -gt 0 ] 2>/dev/null; then
+		case "$used" in
+			*.*) ms=$(awk -v t="$used" 'BEGIN { printf "%d", t * 1000 }') ;;
+			*) ms=$(awk -v t="$used" 'BEGIN { printf "%d", t / 1000 }') ;;
+		esac
+		json_add_int ms "$ms"
+	fi
+	dash_send
+	exit 0
+}
+
+probe() {
+	local host=$2
+	case "$host" in
+		*:*) host="[$host]" ;;
+	esac
+	curl -gso /dev/null --connect-timeout 3 -m 3 -w '%{time_connect}' "http://$host:$3/" > "$tmp/$1"
+}
+
+probe_node() {
+	local id=$1 protocol address port
+	config_get protocol "$id" protocol
+	config_get address "$id" address
+	config_get port "$id" port
+	case "$protocol" in
+		''|_*) return 0 ;;
+	esac
+	[ -n "$address" ] && [ -n "$port" ] || return 0
+	probe "$id" "$address" "$port" &
+}
+
+if [ "$(dash_query mode)" = real ]; then
+	real_test "$(dash_query id)"
+fi
+
+tmp=$(mktemp -d /tmp/dashping.XXXXXX)
+trap 'rm -rf "$tmp"' EXIT
+
+config_load passwall2
+config_foreach probe_node nodes
+wait
+
+json_init
+json_add_boolean ok 1
+json_add_string mode tcp
+json_add_array results
+for file in "$tmp"/*; do
+	[ -f "$file" ] || continue
+	ms=$(awk '{ printf "%d", $1 * 1000 }' "$file")
+	json_add_object
+	json_add_string id "${file##*/}"
+	[ "${ms:-0}" -gt 0 ] && json_add_int ms "$ms"
+	json_close_object
+done
+json_close_array
+dash_send

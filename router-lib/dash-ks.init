@@ -1,0 +1,10 @@
+#!/bin/sh /etc/rc.common
+# Restores the kill switch at boot. START=18 runs before the network comes up, so clients
+# are never forwarded before PassWall (START=99) is ready.
+
+START=18
+
+start() {
+	/usr/lib/dash/dash-ks apply
+	/usr/lib/dash/dash-rtc apply
+}

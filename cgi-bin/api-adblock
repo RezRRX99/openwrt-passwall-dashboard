@@ -1,0 +1,38 @@
+#!/bin/sh
+# api-adblock: ad blocking on or off. Requires a session.
+#
+# GET  /cgi-bin/api-adblock
+# POST /cgi-bin/api-adblock   {"enabled":true}
+#
+# enabled is the owner's choice. active is whether client DNS really goes through AdGuard
+# right now: it stays false while AdGuard is down, so the UI cannot claim blocking that
+# is not happening.
+
+. /usr/lib/dash/dash-lib.sh
+dash_require_session
+
+if [ "$REQUEST_METHOD" = POST ]; then
+	dash_read_body
+	case "$(dash_field enabled)" in
+		true) enabled=1 ;;
+		false) enabled=0 ;;
+		*) dash_fail bad_action ;;
+	esac
+
+	[ -f /etc/config/dash ] || touch /etc/config/dash
+	uci set dash.adblock=adblock
+	uci set "dash.adblock.enabled=$enabled"
+	uci commit dash
+
+	if [ "$enabled" = 1 ]; then
+		/usr/lib/dash/dash-adblock setup || dash_fail adguard_down '500 Internal Server Error'
+	fi
+	/usr/lib/dash/dash-adblock apply || dash_fail adguard_down '500 Internal Server Error'
+fi
+
+json_init
+json_add_boolean ok 1
+if [ "$(uci -q get dash.adblock.enabled)" = 1 ]; then json_add_boolean enabled 1; else json_add_boolean enabled 0; fi
+if dash_adblock_active; then json_add_boolean active 1; else json_add_boolean active 0; fi
+if pidof AdGuardHome >/dev/null; then json_add_boolean running 1; else json_add_boolean running 0; fi
+dash_send

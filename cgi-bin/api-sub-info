@@ -1,0 +1,59 @@
+#!/bin/sh
+# api-sub-info: live quota and expiry of each subscription. Requires a session.
+#
+# GET /cgi-bin/api-sub-info
+#
+# Asks each panel for its subscription-userinfo header. An expired subscription still
+# returns its links, so its nodes look fine until traffic fails. This is how the
+# dashboard catches that. Byte counts are strings: they exceed jshn's integer range.
+#
+# Goes through the proxy when it is up, because panels can be slow or blocked on the direct line.
+
+. /usr/lib/dash/dash-lib.sh
+dash_require_session
+
+userinfo_field() {
+	printf '%s' "$info" | sed -n "s/.*$1=\([0-9]*\).*/\1/p"
+}
+
+add_info() {
+	local id=$1 url agent headers info used upload download total expire
+	config_get url "$id" url
+	config_get agent "$id" user_agent v2rayN
+
+	# Must be a GET: some panels leave this header out of HEAD responses.
+	headers=$(curl -m 12 -s -D - -o /dev/null -A "$agent" $proxy_args "$url" 2>/dev/null | tr -d '\r')
+	info=$(printf '%s\n' "$headers" | grep -i '^subscription-userinfo:')
+	upload=$(userinfo_field upload)
+	download=$(userinfo_field download)
+	total=$(userinfo_field total)
+	expire=$(userinfo_field expire)
+	used=$(awk -v u="${upload:-0}" -v d="${download:-0}" 'BEGIN { printf "%.0f", u + d }')
+
+	json_add_object
+	json_add_string id "$id"
+	if [ -n "$headers" ]; then json_add_boolean reachable 1; else json_add_boolean reachable 0; fi
+	json_add_string used_bytes "$used"
+	json_add_string total_bytes "$total"
+	json_add_string expire "$expire"
+	if [ "${expire:-0}" -gt 0 ] && [ "$expire" -lt "$(date +%s)" ]; then
+		json_add_boolean expired 1
+	else
+		json_add_boolean expired 0
+	fi
+	json_close_object
+}
+
+proxy_args=
+if dash_core_running; then
+	port=$(uci -q get passwall2.@global[0].node_socks_port)
+	proxy_args="-x socks5h://127.0.0.1:${port:-1070}"
+fi
+
+config_load passwall2
+json_init
+json_add_boolean ok 1
+json_add_array subscriptions
+config_foreach add_info subscribe_list
+json_close_array
+dash_send

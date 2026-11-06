@@ -1,0 +1,99 @@
+#!/bin/sh
+# dash-adblock: routes client DNS through AdGuard Home, for ad blocking.
+#
+#   dash-adblock setup    one-time AdGuard settings, see below
+#   dash-adblock apply    match the firewall to the setting, called every minute by dash-guard
+#
+# Chain when on:   client -> AdGuard (5353) -> dnsmasq (53) -> xray, inside the proxy
+# Chain when off:  client -> dnsmasq (53) -> xray
+#
+# The switch is one redirect rule in its own table, so PassWall is never touched and turning
+# it off is instant. AdGuard asks dnsmasq, which follows PassWall by itself: through the proxy
+# when it runs, direct when it is off on purpose.
+#
+# If AdGuard stops answering the rule is removed, because a dead filter must not take the
+# whole network's DNS with it. It comes back once AdGuard answers. That also covers boot:
+# AdGuard starts after the firewall, so the rule only appears once it is ready.
+
+TABLE='inet dash_ab'
+YAML=/etc/adguardhome.yaml
+
+# AdGuard answers this itself from its block list, so it does not depend on the internet.
+adguard_answers() {
+	nslookup -port=5353 doubleclick.net 127.0.0.1 2>/dev/null | grep -q '^Name:'
+}
+
+armed() {
+	nft list tables 2>/dev/null | grep -q dash_ab
+}
+
+arm() {
+	nft -f - <<-EOF
+	table $TABLE {
+		chain dns {
+			type nat hook prerouting priority dstnat - 6; policy accept;
+			iifname "br-lan" udp dport 53 counter redirect to :5353
+			iifname "br-lan" tcp dport 53 counter redirect to :5353
+		}
+	}
+	EOF
+}
+
+disarm() {
+	nft delete table $TABLE 2>/dev/null
+	return 0
+}
+
+# Upstream: AdGuard's own 8.8.8.8 would leave in the clear on the ISP line, so it asks dnsmasq.
+# Cache off: PassWall hands out temporary addresses that die at every restart, and a cached
+# one would break that site. dnsmasq already caches, and PassWall clears it.
+# Rate limit per device: by default it counts per /24, which every client here shares.
+# Query log: it sits in RAM, so 24 hours, not 90 days, and written often for the dashboard report.
+setup() {
+	grep -q '^    - 127.0.0.1:53$' "$YAML" && grep -q '^  size_memory: 20$' "$YAML" && return 0
+
+	/etc/init.d/adguardhome stop
+	[ -e "$YAML.before-dash" ] || cp "$YAML" "$YAML.before-dash"
+	sed -i -e '/^  upstream_dns:$/,/^  upstream_dns_file:/{/^    - /d}' \
+		-e '/^  upstream_dns:$/a\    - 127.0.0.1:53' \
+		-e 's/^  cache_size: .*/  cache_size: 0/' \
+		-e 's/^  ratelimit: .*/  ratelimit: 100/' \
+		-e 's/^  ratelimit_subnet_len_ipv4: .*/  ratelimit_subnet_len_ipv4: 32/' \
+		-e '/^querylog:/,/^[a-z_]*:$/{s/^  interval: .*/  interval: 24h/;s/^  size_memory: .*/  size_memory: 20/}' "$YAML"
+	/etc/init.d/adguardhome start
+
+	i=0
+	while [ "$i" -lt 30 ]; do
+		adguard_answers && return 0
+		sleep 1
+		i=$((i + 1))
+	done
+	return 1
+}
+
+apply() {
+	if [ "$(uci -q get dash.adblock.enabled)" != 1 ]; then
+		disarm
+		return 0
+	fi
+
+	if adguard_answers; then
+		armed || { arm && logger -t dash 'adblock: on'; }
+		return 0
+	fi
+
+	if armed; then
+		disarm
+		logger -t dash 'adblock: AdGuard not answering, DNS goes direct to dnsmasq'
+	fi
+	return 1
+}
+
+case "$1" in
+	setup) setup ;;
+	apply) apply ;;
+	*)
+		echo "usage: $0 setup|apply" >&2
+		exit 1
+		;;
+esac

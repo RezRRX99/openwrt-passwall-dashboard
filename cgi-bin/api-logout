@@ -1,0 +1,13 @@
+#!/bin/sh
+# api-logout: ends this session on the router, so a copied token stops working at once.
+#
+# POST /cgi-bin/api-logout
+
+. /usr/lib/dash/dash-lib.sh
+dash_require_session
+
+ubus call session destroy "{\"ubus_rpc_session\":\"$dash_token\"}" >/dev/null 2>&1
+
+json_init
+json_add_boolean ok 1
+dash_send

@@ -1,0 +1,115 @@
+#!/bin/sh
+# api-add-config: adds nodes from pasted share links. Requires a session.
+#
+# POST /cgi-bin/api-add-config   {"group":"Manual","links":"vless://...\nvless://..."}
+# POST /cgi-bin/api-add-config   {"group":"Manual","links":"vless://...","replace":"<node id>"}
+#
+# Parsing is done by PassWall itself, the same way LuCI's "Add the node via the link" does.
+# "added" is the real number of new nodes. With replace, the old node is deleted only after
+# the new one exists, and if the old node was active the new one takes over. PassWall adds
+# duplicates happily, so a link that matches an existing node is dropped here.
+
+. /usr/lib/dash/dash-lib.sh
+dash_require_session
+dash_read_body
+
+# Two writers on the PassWall config can silently undo each other's changes.
+dash_sub_updating && dash_fail updating '409 Conflict'
+
+LINKS_FILE=/tmp/links.conf
+
+group=$(dash_field group)
+group=${group:-Manual}
+case "$group" in
+	*[\'\"\`\\\$\;\&\|\<\>]*) dash_fail bad_group ;;
+esac
+[ "${#group}" -le 64 ] || dash_fail bad_group
+
+links=$(dash_field links | tr -d '\r')
+[ -n "$links" ] || dash_fail no_links
+
+# Share links contain ? and *, which must not expand as filename patterns here.
+set -f
+
+# Reject the whole paste if any line is not a share link.
+count=0
+for line in $links; do
+	case "$line" in
+		vless://*|vmess://*|trojan://*|ss://*|hysteria2://*|hy2://*|tuic://*) count=$((count + 1)) ;;
+		*) dash_fail bad_link ;;
+	esac
+done
+set +f
+
+replace=$(dash_field replace)
+if [ -n "$replace" ]; then
+	dash_selectable_node "$replace" || dash_fail bad_node
+	[ "$(uci -q get "passwall2.$replace.add_mode")" != 2 ] || dash_fail subscription_node
+fi
+
+# Same credentials on the same address and port means the same server.
+node_key() {
+	printf '%s|%s|%s|%s' "$(uci -q get "passwall2.$1.uuid")" "$(uci -q get "passwall2.$1.password")" \
+		"$(uci -q get "passwall2.$1.address")" "$(uci -q get "passwall2.$1.port")"
+}
+
+is_duplicate() {
+	new_key=$(node_key "$1")
+	for old_id in $before; do
+		[ "$old_id" != "$replace" ] || continue
+		[ "$(node_key "$old_id")" != "$new_key" ] || return 0
+	done
+	return 1
+}
+
+before=" $(dash_node_ids | tr '\n' ' ') "
+
+printf '%s\n' "$links" > "$LINKS_FILE"
+lua /usr/share/passwall2/subscribe.lua add "$group" >/dev/null 2>&1
+rm -f "$LINKS_FILE"
+
+first_new=
+added=0
+for id in $(dash_node_ids); do
+	case "$before" in
+		*" $id "*) ;;
+		*)
+			if is_duplicate "$id"; then
+				uci delete "passwall2.$id"
+			else
+				added=$((added + 1))
+				[ -n "$first_new" ] || first_new=$id
+			fi
+			;;
+	esac
+done
+uci commit passwall2
+[ "$added" -gt 0 ] || dash_fail no_new_nodes
+
+if [ -n "$replace" ]; then
+	balancer=$(dash_balancer_id)
+	if [ -n "$balancer" ]; then
+		case " $(uci -q get "passwall2.$balancer.balancing_node") " in
+			*" $replace "*)
+				uci -q del_list "passwall2.$balancer.balancing_node=$replace"
+				uci add_list "passwall2.$balancer.balancing_node=$first_new"
+				;;
+		esac
+	fi
+	if [ "$replace" = "$(uci -q get passwall2.@global[0].node)" ]; then
+		uci set "passwall2.@global[0].node=$first_new"
+		uci delete "passwall2.$replace"
+		uci commit passwall2
+		dash_passwall_enabled && dash_apply_async restart
+	else
+		uci delete "passwall2.$replace"
+		uci commit passwall2
+	fi
+fi
+
+json_init
+json_add_boolean ok 1
+json_add_int submitted "$count"
+json_add_int added "$added"
+json_add_string id "$first_new"
+dash_send

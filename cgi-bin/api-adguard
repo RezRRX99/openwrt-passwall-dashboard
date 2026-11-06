@@ -1,0 +1,166 @@
+#!/bin/sh
+# api-adguard: AdGuard report for the dashboard. Requires a session.
+#
+# GET /cgi-bin/api-adguard
+#
+# AdGuard's own statistics API needs its login, which the dashboard does not have. So this
+# reads AdGuard's query log instead: no extra account and no stored password. The log lives
+# in RAM, so the report covers the time since the last reboot, 24 hours at most.
+#
+# Reading the log is the expensive part on a small CPU, so the page never waits for it: it gets
+# the last result at once, and a low-priority background job refreshes that at most once a
+# minute. Only the first visit after a reboot computes while the page waits. Domains come from
+# the network, so they are untrusted and go through jshn for escaping.
+
+. /usr/lib/dash/dash-lib.sh
+dash_require_session
+
+LOG=/var/lib/adguardhome/data/querylog.json
+CACHE=/tmp/dash-adguard.cache
+LOCK=/tmp/dash-adguard.lock
+MAX_LINES=10000
+MAX_AGE=60
+
+summarise() {
+	tail -n "$MAX_LINES" "$LOG" 2>/dev/null | awk -v now="$(date +%s)" '
+	function days(y, m, d,    era, yoe, doy) {
+		if (m <= 2) y--
+		era = int(y / 400)
+		yoe = y - era * 400
+		doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+		return era * 146097 + yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy - 719468
+	}
+	function epoch(s,    t, tail, sign, off) {
+		t = days(substr(s, 1, 4) + 0, substr(s, 6, 2) + 0, substr(s, 9, 2) + 0) * 86400
+		t += substr(s, 12, 2) * 3600 + substr(s, 15, 2) * 60 + substr(s, 18, 2)
+		tail = substr(s, length(s) - 5)
+		if (tail ~ /^[+-][0-9][0-9]:[0-9][0-9]$/) {
+			sign = substr(tail, 1, 1) == "-" ? 1 : -1
+			off = substr(tail, 2, 2) * 3600 + substr(tail, 5, 2) * 60
+			t += sign * off
+		}
+		return t
+	}
+	{
+		# Constant patterns on purpose: a pattern built at run time is recompiled on every line.
+		if (!match($0, /"T":"[^"]*"/)) next
+		stamp = substr($0, RSTART + 5, RLENGTH - 6)
+		if (!match($0, /"QH":"[^"]*"/)) next
+		domain = substr($0, RSTART + 6, RLENGTH - 7)
+		client = match($0, /"IP":"[^"]*"/) ? substr($0, RSTART + 6, RLENGTH - 7) : ""
+		# The router asking for itself, such as the guard health check, is not a device.
+		if (client == "127.0.0.1" || client == "::1") next
+		t = epoch(stamp)
+		age = int((now - t) / 3600)
+		if (age < 0 || age > 23) next
+		blocked = index($0, "\"IsFiltered\":true") > 0
+		queries++
+		hour_q[23 - age]++
+		queried[domain]++
+		clients[client]++
+		if (blocked) {
+			total_blocked++
+			hour_b[23 - age]++
+			blocks[domain]++
+		}
+		if (match($0, /"Elapsed":[0-9]+/)) {
+			elapsed += substr($0, RSTART + 10, RLENGTH - 10)
+		}
+		n++
+		recent[n % 30] = t "\t" domain "\t" client "\t" blocked
+	}
+	END {
+		printf "S\t%d\t%d\t%d\n", queries, total_blocked, queries ? elapsed / queries / 1000000 : 0
+		for (i = 0; i < 24; i++) printf "H\t%d\t%d\t%d\n", i, hour_q[i], hour_b[i]
+		for (k in blocks) printf "TB\t%d\t%s\n", blocks[k], k
+		for (k in queried) printf "TQ\t%d\t%s\n", queried[k], k
+		for (k in clients) printf "TC\t%d\t%s\n", clients[k], k
+		for (i = 0; i < 30 && i < n; i++) printf "R\t%s\n", recent[(n - i) % 30]
+	}'
+}
+
+file_age() {
+	echo $(($(date +%s) - $(date -r "$1" +%s)))
+}
+
+refresh() {
+	mkdir "$LOCK" 2>/dev/null || return 0
+	summarise > "$CACHE.new" && mv "$CACHE.new" "$CACHE"
+	rmdir "$LOCK"
+}
+
+# A job killed halfway must not block every later refresh.
+[ -d "$LOCK" ] && [ "$(file_age "$LOCK")" -gt 120 ] && rmdir "$LOCK"
+
+if [ ! -f "$CACHE" ]; then
+	refresh
+elif [ "$(file_age "$CACHE")" -ge "$MAX_AGE" ]; then
+	( renice -n 19 -p $$ >/dev/null 2>&1; refresh ) </dev/null >/dev/null 2>&1 &
+fi
+[ -f "$CACHE" ] || : > "$CACHE"
+
+# Count comes first so a plain numeric sort works: BusyBox ignores n and r on a sort key.
+add_top() {
+	json_add_array "$2"
+	grep "^$1	" "$CACHE" | cut -f2- | sort -rn | head -n 10 > "$WORK.top"
+	while IFS='	' read -r count name; do
+		json_add_object
+		json_add_string name "$name"
+		json_add_int count "$count"
+		json_close_object
+	done < "$WORK.top"
+	rm -f "$WORK.top"
+	json_close_array
+}
+
+# Per request, because two open tabs can run this at once.
+WORK=/tmp/dash-adguard.$$
+
+add_hours() {
+	json_add_array "$1"
+	for value in $(awk -F '	' -v col="$2" '$1 == "H" { print $col }' "$CACHE"); do
+		json_add_int "" "$value"
+	done
+	json_close_array
+}
+
+IFS='	' read -r _ queries blocked avg_ms < "$CACHE"
+queries=${queries:-0}
+blocked=${blocked:-0}
+avg_ms=${avg_ms:-0}
+
+json_init
+json_add_boolean ok 1
+if [ "$(uci -q get dash.adblock.enabled)" = 1 ]; then json_add_boolean enabled 1; else json_add_boolean enabled 0; fi
+if dash_adblock_active; then json_add_boolean active 1; else json_add_boolean active 0; fi
+if pidof AdGuardHome >/dev/null; then json_add_boolean running 1; else json_add_boolean running 0; fi
+
+json_add_object stats
+if [ "$queries" -gt 0 ]; then json_add_boolean available 1; else json_add_boolean available 0; fi
+json_add_int queries "$queries"
+json_add_int blocked "$blocked"
+json_add_double blocked_pct "$(awk -v b="$blocked" -v q="$queries" 'BEGIN { printf "%.1f", q ? b * 100 / q : 0 }')"
+json_add_int avg_ms "$avg_ms"
+json_add_object hourly
+add_hours queries 3
+add_hours blocked 4
+json_close_object
+add_top TB top_blocked
+add_top TQ top_queried
+add_top TC top_clients
+json_close_object
+
+json_add_array recent
+grep '^R	' "$CACHE" > "$WORK.recent"
+while IFS='	' read -r _ time domain client blocked_flag; do
+	json_add_object
+	json_add_int time "$time"
+	json_add_string domain "$domain"
+	json_add_string client "$client"
+	json_add_boolean blocked "${blocked_flag:-0}"
+	json_close_object
+done < "$WORK.recent"
+rm -f "$WORK.recent"
+json_close_array
+
+dash_send

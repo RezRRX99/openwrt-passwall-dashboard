@@ -1,0 +1,25 @@
+#!/bin/sh
+# api-sub-update: runs PassWall's subscription update. Requires a session.
+#
+# GET  /cgi-bin/api-sub-update   {"running":true|false,"last":"ok|timeout"}
+# POST /cgi-bin/api-sub-update   starts it in the background
+#
+# Updates can outlast uhttpd's 60 second CGI limit, so this never waits for one.
+
+. /usr/lib/dash/dash-lib.sh
+dash_require_session
+
+running=0
+if [ "$REQUEST_METHOD" = POST ]; then
+	dash_read_body
+	dash_sub_updating || dash_start_sub_update all
+	running=1
+elif dash_sub_updating; then
+	running=1
+fi
+
+json_init
+json_add_boolean ok 1
+json_add_boolean running "$running"
+json_add_string last "$(cat /tmp/dash-sub.state 2>/dev/null)"
+dash_send

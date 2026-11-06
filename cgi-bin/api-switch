@@ -1,0 +1,32 @@
+#!/bin/sh
+# api-switch: selects the active node. Requires a session.
+#
+# POST /cgi-bin/api-switch   {"id":"<node id>"}
+#
+# When PassWall is on, the restart runs in the background and returns to the previous
+# node if traffic fails. Poll api-status for last_apply.
+
+. /usr/lib/dash/dash-lib.sh
+dash_require_session
+dash_read_body
+dash_apply_running && dash_fail busy '409 Conflict'
+
+id=$(dash_field id)
+dash_selectable_node "$id" || dash_fail bad_node
+
+previous=$(uci -q get passwall2.@global[0].node)
+restarting=0
+if [ "$id" != "$previous" ]; then
+	uci set "passwall2.@global[0].node=$id"
+	uci commit passwall2
+	if dash_passwall_enabled; then
+		dash_apply_async restart "$previous"
+		restarting=1
+	fi
+fi
+
+json_init
+json_add_boolean ok 1
+json_add_string active "$id"
+json_add_boolean restarting "$restarting"
+dash_send

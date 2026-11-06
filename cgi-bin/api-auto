@@ -1,0 +1,69 @@
+#!/bin/sh
+# api-auto: settings of the auto-switch balancer. Requires a session.
+#
+# GET  /cgi-bin/api-auto
+# POST /cgi-bin/api-auto   {"interval":"2m","pool":["id1","id2"]}
+#
+# The balancer is PassWall's own _balancing node. Selecting it with api-switch is what
+# turns automatic mode on. Saving restarts PassWall only if the balancer is in use.
+
+. /usr/lib/dash/dash-lib.sh
+dash_require_session
+
+find_balancer() {
+	[ -z "$balancer" ] && [ "$(uci -q get "passwall2.$1.protocol")" = _balancing ] && balancer=$1
+	return 0
+}
+
+balancer=
+config_load passwall2
+config_foreach find_balancer nodes
+[ -n "$balancer" ] || dash_fail no_balancer
+
+if [ "$REQUEST_METHOD" = POST ]; then
+	dash_read_body
+	dash_apply_running && dash_fail busy '409 Conflict'
+	interval=$(dash_field interval)
+	case "$interval" in
+		[0-9]m|[0-9][0-9]m|[0-9][0-9]s|[0-9][0-9][0-9]s) ;;
+		*) dash_fail bad_interval ;;
+	esac
+
+	ids=$(printf '%s' "$DASH_BODY" | jsonfilter -e '@.pool[*]' 2>/dev/null | sort -u)
+	[ -n "$ids" ] || dash_fail empty_pool
+	for id in $ids; do
+		dash_selectable_node "$id" || dash_fail bad_node
+		[ "$id" != "$balancer" ] || dash_fail bad_node
+	done
+
+	uci set "passwall2.$balancer.probeInterval=$interval"
+	uci -q delete "passwall2.$balancer.balancing_node"
+	for id in $ids; do
+		uci add_list "passwall2.$balancer.balancing_node=$id"
+	done
+	uci commit passwall2
+
+	# Remembers whether the owner wants every server, or chose a smaller list on purpose.
+	[ -f /etc/config/dash ] || touch /etc/config/dash
+	uci set dash.auto=auto
+	if dash_pool_has_all "$balancer"; then uci set dash.auto.all=1; else uci set dash.auto.all=0; fi
+	uci commit dash
+
+	if dash_passwall_enabled && [ "$(uci -q get passwall2.@global[0].node)" = "$balancer" ]; then
+		dash_apply_async restart
+	fi
+fi
+
+json_init
+json_add_boolean ok 1
+json_add_string id "$balancer"
+json_add_string name "$(uci -q get "passwall2.$balancer.remarks")"
+json_add_string strategy "$(uci -q get "passwall2.$balancer.balancingStrategy")"
+json_add_string interval "$(uci -q get "passwall2.$balancer.probeInterval")"
+json_add_array pool
+# The stored list can hold duplicates after subscription updates.
+for id in $(uci -q get "passwall2.$balancer.balancing_node" | tr ' ' '\n' | sort -u); do
+	json_add_string "" "$id"
+done
+json_close_array
+dash_send

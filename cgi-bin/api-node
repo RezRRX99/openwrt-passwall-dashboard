@@ -1,0 +1,30 @@
+#!/bin/sh
+# api-node: deletes a node added by link. Requires a session.
+#
+# POST /cgi-bin/api-node   {"action":"delete","id":"<node id>"}
+#
+# Subscription nodes are refused, because the next update would bring them back. The
+# active node is refused too: select another one first.
+
+. /usr/lib/dash/dash-lib.sh
+dash_require_session
+dash_read_body
+dash_sub_updating && dash_fail updating '409 Conflict'
+
+id=$(dash_field id)
+[ "$(dash_field action)" = delete ] || dash_fail bad_action
+dash_selectable_node "$id" || dash_fail bad_node
+case "$(uci -q get "passwall2.$id.protocol")" in
+	_*) dash_fail bad_node ;;
+esac
+[ "$(uci -q get "passwall2.$id.add_mode")" != 2 ] || dash_fail subscription_node
+[ "$id" != "$(uci -q get passwall2.@global[0].node)" ] || dash_fail active_node
+
+balancer=$(dash_balancer_id)
+[ -n "$balancer" ] && uci -q del_list "passwall2.$balancer.balancing_node=$id"
+uci delete "passwall2.$id"
+uci commit passwall2
+
+json_init
+json_add_boolean ok 1
+dash_send

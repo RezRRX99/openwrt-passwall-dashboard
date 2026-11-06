@@ -1,0 +1,103 @@
+#!/bin/sh
+# dash-rtc: hides the real public IP and all IPv6 from websites, on or off.
+#
+#   dash-rtc apply    match the router to the setting
+#
+# While on:
+#   - UDP STUN is dropped on every port, not only the usual ones. STUN is how WebRTC asks a server
+#     for the public address, and each STUN packet carries the same fixed value (0x2112a442) at
+#     the same place, so it is recognised by content. WebRTC can then only use relays over
+#     TCP, which go through the proxy.
+#   - IPv6 stops at the router, and devices are no longer given an IPv6 address, so WebRTC has
+#     none to report. Link-local and multicast stay, because the LAN needs them.
+#   - dash-ks stays armed even with PassWall off. See its header.
+#
+# Everything runs ahead of PassWall's rules, so it holds while the proxy is off or restarting.
+# Private addresses such as 192.168.x.x can still appear in a WebRTC test. They come from
+# inside the device, a router cannot hide them, and they reveal nothing about the line.
+# Some web calls may fail while this is on, because they rely on STUN too.
+
+TABLE='inet dash_rtc'
+COOKIE=0x2112a442
+# dhcp sections of the networks clients join.
+LANS='lan'
+
+# The cookie check also replaces a table left by an older version of this script.
+armed() {
+	nft list table $TABLE 2>/dev/null | grep -q "$COOKIE"
+}
+
+arm() {
+	# One transaction: declaring the table first lets the delete succeed on the first run.
+	nft -f - <<-EOF
+	table $TABLE
+	delete table $TABLE
+	table $TABLE {
+		chain block {
+			type filter hook prerouting priority mangle - 5; policy accept;
+			iifname != "br-lan" return
+			meta nfproto ipv6 ip6 daddr != { fe80::/10, ff00::/8 } counter reject with icmpx admin-prohibited
+			udp dport { 3478, 5349, 19302-19309 } counter drop
+			meta l4proto udp @th,96,32 $COOKIE counter drop
+			tcp dport { 3478, 5349 } counter reject with tcp reset
+		}
+	}
+	EOF
+}
+
+# The values before the change are saved once, so turning this off restores them exactly.
+ipv6_off() {
+	changed=
+	for lan in $LANS; do
+		uci -q get "dhcp.$lan" >/dev/null || continue
+		[ "$(uci -q get "dhcp.$lan.ra")" = disabled ] && [ "$(uci -q get "dhcp.$lan.dhcpv6")" = disabled ] && continue
+		[ -n "$(uci -q get "dash.rtc.saved_$lan")" ] || uci set "dash.rtc.saved_$lan=$(uci -q get "dhcp.$lan.ra")|$(uci -q get "dhcp.$lan.dhcpv6")|$(uci -q get "dhcp.$lan.ndp")"
+		uci set "dhcp.$lan.ra=disabled"
+		uci set "dhcp.$lan.dhcpv6=disabled"
+		uci set "dhcp.$lan.ndp=disabled"
+		changed=1
+	done
+	[ -n "$changed" ] || return 0
+	uci commit dash
+	uci commit dhcp
+	/etc/init.d/odhcpd reload
+}
+
+restore_option() {
+	if [ -n "$3" ]; then uci set "dhcp.$1.$2=$3"; else uci -q delete "dhcp.$1.$2"; fi
+}
+
+ipv6_on() {
+	changed=
+	for lan in $LANS; do
+		saved=$(uci -q get "dash.rtc.saved_$lan") || continue
+		ra=${saved%%|*}
+		rest=${saved#*|}
+		restore_option "$lan" ra "$ra"
+		restore_option "$lan" dhcpv6 "${rest%%|*}"
+		restore_option "$lan" ndp "${rest#*|}"
+		uci delete "dash.rtc.saved_$lan"
+		changed=1
+	done
+	[ -n "$changed" ] || return 0
+	uci commit dash
+	uci commit dhcp
+	/etc/init.d/odhcpd reload
+}
+
+case "$1" in
+	apply)
+		if [ "$(uci -q get dash.rtc.enabled)" = 1 ]; then
+			armed || arm || exit 1
+			ipv6_off
+		else
+			nft delete table $TABLE 2>/dev/null
+			ipv6_on
+		fi
+		exit 0
+		;;
+	*)
+		echo "usage: $0 apply" >&2
+		exit 1
+		;;
+esac

@@ -1,0 +1,54 @@
+#!/bin/sh
+# dash-guard: connection guard, run by cron every minute.
+#
+# PassWall's app.sh start() calls stop() when it finds any leftover process under its bin
+# folder, and stop() ends in "exit 0". So a restart can silently end with the proxy down,
+# and with the kill switch on that means no foreign internet until someone notices.
+#
+# Waits for two checks in a row, so a restart already in flight is left alone.
+#
+# It also keeps ad blocking in step with AdGuard, and keeps auto mode complete. PassWall's subscription update rewrites the balancer list by
+# name, and a download cut short can drop servers, so the list slowly shrinks otherwise.
+
+. /usr/lib/dash/dash-lib.sh
+
+MISSED=/tmp/dash-guard.missed
+
+keep_pool_complete() {
+	dash_pool_wants_all || return 0
+	dash_apply_running && return 0
+	dash_sub_updating && return 0
+	balancer=$(dash_balancer_id)
+	[ -n "$balancer" ] || return 0
+	dash_pool_has_all "$balancer" && return 0
+
+	dash_pool_add_all "$balancer"
+	logger -t dash 'guard: added missing servers to auto mode'
+	[ "$(uci -q get passwall2.@global[0].node)" = "$balancer" ] && dash_apply_async restart
+}
+
+# First, because ad blocking works with PassWall off too.
+/usr/lib/dash/dash-adblock apply >/dev/null 2>&1
+/usr/lib/dash/dash-rtc apply >/dev/null 2>&1
+
+dash_passwall_enabled || { rm -f "$MISSED"; exit 0; }
+
+if dash_core_running; then
+	rm -f "$MISSED"
+	keep_pool_complete
+	exit 0
+fi
+
+# Someone is already working on it.
+dash_apply_running && exit 0
+dash_sub_updating && exit 0
+pgrep -f 'passwall2/app.sh' >/dev/null 2>&1 && exit 0
+
+if [ ! -e "$MISSED" ]; then
+	touch "$MISSED"
+	exit 0
+fi
+
+rm -f "$MISSED"
+logger -t dash 'guard: core is down with the main switch on, restarting'
+dash_apply_async restart

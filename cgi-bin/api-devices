@@ -1,0 +1,31 @@
+#!/bin/sh
+# api-devices: lists LAN clients from the DHCP leases. Requires a session.
+#
+# GET /cgi-bin/api-devices
+
+. /usr/lib/dash/dash-lib.sh
+dash_require_session
+
+LEASES=/tmp/dhcp.leases
+
+json_init
+json_add_boolean ok 1
+json_add_array devices
+if [ -r "$LEASES" ]; then
+	while read -r expires mac ip name _; do
+		state=$(ip neigh show "$ip" 2>/dev/null | awk '{ print $NF }')
+		[ "$name" = '*' ] && name=
+		json_add_object
+		json_add_string mac "$mac"
+		json_add_string ip "$ip"
+		json_add_string name "$name"
+		json_add_int lease_expires "$expires"
+		case "$state" in
+			REACHABLE|DELAY|PROBE|STALE) json_add_boolean online 1 ;;
+			*) json_add_boolean online 0 ;;
+		esac
+		json_close_object
+	done < "$LEASES"
+fi
+json_close_array
+dash_send
