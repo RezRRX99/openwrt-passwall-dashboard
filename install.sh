@@ -137,6 +137,13 @@ add_cron '45 4 * * *' '/usr/lib/dash/dash-sub-check full'
 
 [ -f /etc/config/dash ] || touch /etc/config/dash
 
+# Ad blocking already on from an older version: bring AdGuard Home's settings up to date.
+# It restarts AdGuard once, only when a setting changed, and DNS pauses for about a second.
+if [ "$(uci -q get dash.adblock.enabled)" = 1 ] && [ -x /etc/init.d/adguardhome ]; then
+	/usr/lib/dash/dash-adblock setup >/dev/null 2>&1 ||
+		say 'Note: AdGuard Home did not answer after its settings were updated. Check it in the dashboard.'
+fi
+
 # ---- Done ----
 
 ip=$(uci -q get network.lan.ipaddr)

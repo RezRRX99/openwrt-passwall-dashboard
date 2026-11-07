@@ -49,8 +49,14 @@ disarm() {
 # one would break that site. dnsmasq already caches, and PassWall clears it.
 # Rate limit per device: by default it counts per /24, which every client here shares.
 # Query log: it sits in RAM, so 24 hours, not 90 days, and written often for the dashboard report.
+# Block lists: they sit in RAM too, so every reboot downloads them again. The router's direct
+# line often cannot reach GitHub, which left AdGuard with no rules at all, so it downloads
+# through PassWall's SOCKS port. If the proxy is not up yet, AdGuard retries by itself.
+# An http_proxy the owner set is kept.
 setup() {
-	grep -q '^    - 127.0.0.1:53$' "$YAML" && grep -q '^  size_memory: 20$' "$YAML" && return 0
+	grep -q '^    - 127.0.0.1:53$' "$YAML" && grep -q '^  size_memory: 20$' "$YAML" &&
+		! grep -q '^http_proxy: ""$' "$YAML" && return 0
+	port=$(uci -q get 'passwall2.@global[0].node_socks_port')
 
 	/etc/init.d/adguardhome stop
 	[ -e "$YAML.before-dash" ] || cp "$YAML" "$YAML.before-dash"
@@ -59,7 +65,8 @@ setup() {
 		-e 's/^  cache_size: .*/  cache_size: 0/' \
 		-e 's/^  ratelimit: .*/  ratelimit: 100/' \
 		-e 's/^  ratelimit_subnet_len_ipv4: .*/  ratelimit_subnet_len_ipv4: 32/' \
-		-e '/^querylog:/,/^[a-z_]*:$/{s/^  interval: .*/  interval: 24h/;s/^  size_memory: .*/  size_memory: 20/}' "$YAML"
+		-e '/^querylog:/,/^[a-z_]*:$/{s/^  interval: .*/  interval: 24h/;s/^  size_memory: .*/  size_memory: 20/}' \
+		-e "s#^http_proxy: \"\"\$#http_proxy: socks5://127.0.0.1:${port:-1070}#" "$YAML"
 	/etc/init.d/adguardhome start
 
 	i=0
