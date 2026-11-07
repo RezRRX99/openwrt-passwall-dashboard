@@ -29,3 +29,7 @@ while kill -0 "$lua_pid" 2>/dev/null; do
 done
 
 echo ok > "$STATE"
+
+# The servers just loaded become what the hourly check compares against. PassWall restarts
+# after an update, so this waits for the proxy, outside this process so the UI is not kept busy.
+sh -c 'sleep 60; exec /usr/lib/dash/dash-sub-check baseline "$0"' "$1" </dev/null >/dev/null 2>&1 &

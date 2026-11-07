@@ -59,6 +59,10 @@ def attempt(name, action):
 def test_login(page):
     mock("/__reset")
     page.goto(f"{BASE}/?login#home")
+    user = tid(page, "login-user")
+    check("login: a fixed user name lets password managers save the login",
+          user.get_attribute("autocomplete") == "username" and user.input_value() == "root"
+          and tid(page, "login-password").get_attribute("autocomplete") == "current-password")
     tid(page, "login-password").fill("wrong")
     tid(page, "login-submit").click()
     page.wait_for_timeout(500)

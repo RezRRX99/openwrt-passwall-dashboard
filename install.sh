@@ -121,10 +121,17 @@ chmod 755 /etc/init.d/dash-ks
 # ---- Cron ----
 
 touch /etc/crontabs/root
-if ! grep -q dash-guard /etc/crontabs/root; then
-	echo '* * * * * /usr/lib/dash/dash-guard' >> /etc/crontabs/root
-	/etc/init.d/cron restart
-fi
+cron_changed=
+add_cron() {
+	grep -qF "$2" /etc/crontabs/root && return 0
+	echo "$1 $2" >> /etc/crontabs/root
+	cron_changed=1
+}
+add_cron '* * * * *' /usr/lib/dash/dash-guard
+# Hourly subscription check, and a nightly full update while nobody is online.
+add_cron '17 * * * *' /usr/lib/dash/dash-sub-check
+add_cron '45 4 * * *' '/usr/lib/dash/dash-sub-check full'
+[ -n "$cron_changed" ] && /etc/init.d/cron restart
 
 # ---- Settings file: empty, so every protection stays off until the user turns it on. ----
 

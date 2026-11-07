@@ -15,6 +15,7 @@ A small bilingual (Persian and English) web dashboard for PassWall2 on OpenWrt. 
 - Servers with real tests: latency by TCP connect, or a real request through the chosen server.
 - Automatic best server: a balancer that switches between servers, with a saved server list and check interval.
 - Subscriptions: add, change and delete subscription links, update them with a time limit, and paste single share links.
+- Quiet subscription updates: every hour the dashboard compares the servers in each subscription, ignoring order, names and the Reality short id, and updates PassWall only when they really changed, so there is no hourly restart. A full update runs nightly at 04:45.
 - Kill switch with smart and strict modes: when PassWall is down, stops LAN devices reaching foreign sites on the normal internet line.
 - DNS leak protection: while the kill switch is armed, client DNS is redirected to the router, which resolves through PassWall while it runs.
 - AdGuard Home switch and reports: turn ad blocking on or off instantly and see query reports.

@@ -32,8 +32,8 @@ if [ -e /etc/adguardhome.yaml.before-dash ]; then
 fi
 
 # 4. Cron.
-if [ -f /etc/crontabs/root ] && grep -q dash-guard /etc/crontabs/root; then
-	sed -i '/dash-guard/d' /etc/crontabs/root
+if [ -f /etc/crontabs/root ] && grep -qE 'dash-guard|dash-sub-check' /etc/crontabs/root; then
+	sed -i -e '/dash-guard/d' -e '/dash-sub-check/d' /etc/crontabs/root
 	/etc/init.d/cron restart
 fi
 
@@ -45,6 +45,7 @@ rm -f /www/cgi-bin/api-* /etc/config/dash
 
 say 'Dashboard removed.'
 say 'PassWall was not touched: its servers and subscriptions are left as they are.'
+say 'Automatic subscription updates in PassWall stay at every 24 hours. Change that in LuCI if you want.'
 }
 
 main "$@"

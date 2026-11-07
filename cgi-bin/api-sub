@@ -49,7 +49,8 @@ add_sub() {
 	done
 	uci set "passwall2.$sid.auto_update=1"
 	uci set "passwall2.$sid.week_update=8"
-	uci set "passwall2.$sid.interval_update=1"
+	# dash-sub-check looks every hour and updates only when the servers really change.
+	uci set "passwall2.$sid.interval_update=24"
 	uci set "passwall2.$sid.user_agent=v2rayN/9.99"
 }
 

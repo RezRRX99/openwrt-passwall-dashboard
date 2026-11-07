@@ -550,3 +550,4 @@ transform:translateX(calc(var(--gs-at)*var(--gs-dir))) scale(var(--gs-squash));t
 .gs.wait .gs-state{color:var(--gs-word-wait)}
 .home-sw+.facts{margin-block-start:20px}
 @media (prefers-reduced-motion:reduce){.gs-knob,.gs-track{transition:none}.gs[aria-busy="true"] .gs-knob{animation:none}}
+.input[readonly]{color:var(--text-2);cursor:default}

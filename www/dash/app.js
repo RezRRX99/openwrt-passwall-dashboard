@@ -461,7 +461,12 @@ function renderLogin() {
   var pw = el('input', { type: 'password', id: 'pw', class: 'input', autocomplete: 'current-password', required: true, dir: 'ltr', 'data-testid': 'login-password' });
   var err = el('p', { class: 'err-text', role: 'alert', hidden: true });
   var btn = el('button', { type: 'submit', class: 'btn btn-primary btn-block', 'data-testid': 'login-submit' },[icon('check'), el('span', null, t('lg_submit'))]);
-  var form = el('form', { novalidate: true }, [
+  // Password managers save a login only with a user name beside the password. The router's
+  // user is always root, so the field is fixed.
+  var user = el('input', { type: 'text', id: 'user', name: 'username', class: 'input', autocomplete: 'username', readonly: true, value: 'root', dir: 'ltr', 'data-testid': 'login-user' });
+  pw.name = 'password';
+  var form = el('form', { novalidate: true, method: 'post', action: '#' }, [
+    el('div', { class: 'field' }, [el('label', { class: 'fld', 'for': 'user' }, t('lg_user')), user]),
     el('div', { class: 'field' }, [el('label', { class: 'fld', 'for': 'pw' }, t('lg_password')), pw]),
     err, btn
   ]);

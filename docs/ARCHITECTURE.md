@@ -21,6 +21,7 @@ The dashboard adds its own nftables tables and never edits PassWall's rules. Eac
 ## Background jobs
 
 - `dash-guard`: run by cron every minute. If PassWall is meant to be on but its core is down for two checks in a row, it restarts it. It also keeps `dash-adblock` in step and adds missing servers to the auto-mode balancer.
+- `dash-sub-check`: hourly from cron. Downloads each auto-updated subscription through PassWall, fingerprints its servers without order, names or Reality sid, and runs `dash-sub-update` only when that fingerprint changes. Nightly at 04:45 it runs a full update. PassWall's own schedule for those subscriptions is set to 24 hours.
 - `dash-apply`: runs PassWall restarts and stops in the background, one at a time, and writes the result (working, ok, reverted or failed) to `/tmp/dash-apply.state`. After a restart it proves real traffic through the node; if that fails it rolls back to the previous node. Turning PassWall on passes no previous node on purpose, so it never falls back to a direct line.
 - `dash-sub-update`: runs PassWall's subscription update with a time limit and records running, ok or timeout in `/tmp/dash-sub.state`.
 

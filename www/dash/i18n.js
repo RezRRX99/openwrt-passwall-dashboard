@@ -37,6 +37,7 @@ fa: {
   nav_adguard: 'AdGuard',
   nav_settings: 'تنظیمات',
 
+  lg_user: 'نام کاربری',
   lg_password: 'گذرواژه',
   lg_submit: 'ورود',
   lg_sub: 'برای ورود، گذرواژه روتر را وارد کنید.',
@@ -297,6 +298,7 @@ en: {
   nav_adguard: 'AdGuard',
   nav_settings: 'Settings',
 
+  lg_user: 'User name',
   lg_password: 'Password',
   lg_submit: 'Sign in',
   lg_sub: 'Enter the router password to continue.',

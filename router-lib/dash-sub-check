@@ -1,0 +1,157 @@
+#!/bin/sh
+# dash-sub-check: updates subscriptions only when their servers really change.
+#
+#   dash-sub-check                      hourly check (cron)
+#   dash-sub-check dry-run              say what it would do, change nothing
+#   dash-sub-check baseline <ids|all>   record the servers just loaded by a full update
+#   dash-sub-check full                 full update of every auto-updated subscription (nightly)
+#
+# PassWall's own update deletes and re-creates every server and restarts, even when nothing
+# changed. Some providers shuffle the order, rename servers or pick a new Reality short id
+# (sid) on every download, so an hourly update meant an hourly outage. This compares only what
+# a connection needs: address, port, id and settings, sorted, without names and without sid.
+# The sid comes from a fixed list on the server, so any of them works. The nightly full update
+# picks up changes to that list and to server names.
+#
+# PassWall's own schedule for these subscriptions is moved to every 24 hours.
+
+. /usr/lib/dash/dash-lib.sh
+
+DIR=${DASH_SUBCHECK_DIR:-/tmp/dash-subcheck}
+mkdir -p "$DIR"
+chmod 700 "$DIR"
+
+say() {
+	if [ "$MODE" = dry-run ]; then echo "$*"; else logger -t dash "sub check: $*"; fi
+}
+
+# Every subscription with automatic updates on, by its real section name.
+auto_subs() {
+	uci -X show passwall2 | sed -n 's/^passwall2\.\([A-Za-z0-9_]*\)=subscribe_list$/\1/p' | while read -r s; do
+		dash_valid_id "$s" && [ "$(uci -q get "passwall2.$s.auto_update")" = 1 ] && echo "$s"
+	done
+}
+
+# Downloads through PassWall, since many lines cannot reach the providers directly.
+fetch() {
+	dash_core_running || return 1
+	port=$(uci -q get 'passwall2.@global[0].node_socks_port')
+	agent=$(uci -q get "passwall2.$1.user_agent")
+	curl -s -m 40 -x "socks5h://127.0.0.1:${port:-1070}" -A "${agent:-v2rayN/9.99}" "$(uci -q get "passwall2.$1.url")"
+}
+
+b64d() {
+	tr -d ' \r\n' | tr '_-' '/+' | awk '{ n = length($0) % 4; if (n == 2) $0 = $0 "=="; else if (n == 3) $0 = $0 "="; print }' | base64 -d 2>/dev/null
+}
+
+# One line per server: name after # removed, vmess's "ps" name removed, sid removed, query sorted.
+normalize() {
+	while read -r line; do
+		case "$line" in
+			vmess://*) printf '%s' "${line#vmess://}" | b64d | sed -E 's/"ps" *: *"[^"]*",?//'; echo ;;
+			*://*) echo "${line%%#*}" ;;
+		esac
+	done | awk '{
+		i = index($0, "?")
+		if (i == 0) { print; next }
+		base = substr($0, 1, i - 1)
+		n = split(substr($0, i + 1), p, "&")
+		m = 0
+		for (j = 1; j <= n; j++) if (p[j] != "" && p[j] !~ /^sid=/) { m++; k[m] = p[j] }
+		for (a = 2; a <= m; a++) { v = k[a]; b = a - 1; while (b > 0 && k[b] > v) { k[b + 1] = k[b]; b-- } k[b + 1] = v }
+		out = base "?"
+		for (j = 1; j <= m; j++) out = out (j > 1 ? "&" : "") k[j]
+		print out
+	}' | sort
+}
+
+# Prints the fingerprint, or fails when the download did not work.
+fingerprint() {
+	body=$(fetch "$1") || return 1
+	[ -n "$body" ] || return 1
+	links=$(printf '%s' "$body" | b64d | grep -E '^[a-z0-9]+://')
+	[ -n "$links" ] || links=$(printf '%s\n' "$body" | tr -d '\r' | grep -E '^[a-z0-9]+://')
+	if [ -n "$links" ]; then
+		printf '%s\n' "$links" | normalize | md5sum | cut -d' ' -f1
+	else
+		# Another format, such as YAML or JSON: any change counts, as with PassWall itself.
+		echo "raw-$(printf '%s' "$body" | md5sum | cut -d' ' -f1)"
+	fi
+}
+
+has_servers() {
+	remark=$(uci -q get "passwall2.$1.remark")
+	[ -n "$remark" ] && uci show passwall2 | grep -qF ".group='$remark'"
+}
+
+record() {
+	fp=$(fingerprint "$1") || { say "$(uci -q get "passwall2.$1.remark"): download failed, nothing recorded"; return 1; }
+	echo "$fp" > "$DIR/$1"
+}
+
+MODE=${1:-check}
+
+case "$MODE" in
+	baseline)
+		ids=$2
+		[ "$ids" = all ] && ids=$(auto_subs | tr '\n' ',')
+		for s in $(echo "$ids" | tr ',' ' '); do
+			dash_valid_id "$s" && record "$s"
+		done
+		exit 0
+		;;
+	full)
+		ids=$(auto_subs | tr '\n' ',' | sed 's/,$//')
+		[ -n "$ids" ] || exit 0
+		dash_apply_running || dash_sub_updating || /usr/lib/dash/dash-sub-update "$ids"
+		exit 0
+		;;
+	check|dry-run) ;;
+	*)
+		echo "usage: $0 [dry-run|baseline <ids|all>|full]" >&2
+		exit 1
+		;;
+esac
+
+dash_passwall_enabled || exit 0
+changed=
+for s in $(auto_subs); do
+	name=$(uci -q get "passwall2.$s.remark")
+	if [ "$MODE" = check ] && [ "$(uci -q get "passwall2.$s.interval_update")" != 24 ]; then
+		uci set "passwall2.$s.week_update=8"
+		uci set "passwall2.$s.interval_update=24"
+		uci commit passwall2
+		say "$name: PassWall's own update moved to every 24 hours"
+	fi
+	if ! has_servers "$s"; then
+		say "$name: no servers loaded yet, updating"
+		changed="$changed,$s"
+		continue
+	fi
+	fp=$(fingerprint "$s") || { say "$name: download failed, nothing changed"; continue; }
+	old=$(cat "$DIR/$s" 2>/dev/null)
+	if [ -z "$old" ]; then
+		say "$name: first check since boot, servers recorded"
+		[ "$MODE" = check ] && echo "$fp" > "$DIR/$s"
+	elif [ "$old" = "$fp" ]; then
+		say "$name: servers unchanged, no restart"
+	else
+		say "$name: servers changed, updating"
+		changed="$changed,$s"
+	fi
+done
+
+# Forget subscriptions that were deleted or no longer update automatically.
+for f in "$DIR"/*; do
+	[ -f "$f" ] || continue
+	auto_subs | grep -qx "${f##*/}" || { [ "$MODE" = check ] && rm -f "$f"; }
+done
+
+changed=${changed#,}
+[ -n "$changed" ] || exit 0
+[ "$MODE" = check ] || { echo "would update: $changed"; exit 0; }
+if dash_apply_running || dash_sub_updating; then
+	say 'another change is running, trying again next hour'
+	exit 0
+fi
+/usr/lib/dash/dash-sub-update "$changed"
