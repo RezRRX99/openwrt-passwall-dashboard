@@ -1,12 +1,32 @@
 #!/bin/sh
-# api-devices: lists LAN clients from the DHCP leases. Requires a session.
+# api-devices: lists LAN clients from the DHCP leases, and blocked devices. Requires a session.
 #
 # GET /cgi-bin/api-devices
+#
+# "self" marks the device sending the request, which the page never offers to block.
 
 . /usr/lib/dash/dash-lib.sh
 dash_require_session
 
 LEASES=/tmp/dhcp.leases
+blocked=" $(uci -q get dash.block.mac) "
+self=$(ip neigh show "$REMOTE_ADDR" 2>/dev/null | awk '/lladdr/ { print $5; exit }')
+seen=' '
+
+device() {
+	json_add_object
+	json_add_string mac "$1"
+	json_add_string ip "$2"
+	json_add_string name "$3"
+	json_add_int lease_expires "${4:-0}"
+	if [ "$5" = 1 ]; then json_add_boolean online 1; else json_add_boolean online 0; fi
+	case "$blocked" in
+		*" $1 "*) json_add_boolean blocked 1 ;;
+		*) json_add_boolean blocked 0 ;;
+	esac
+	[ -n "$self" ] && [ "$1" = "$self" ] && json_add_boolean self 1
+	json_close_object
+}
 
 json_init
 json_add_boolean ok 1
@@ -15,17 +35,20 @@ if [ -r "$LEASES" ]; then
 	while read -r expires mac ip name _; do
 		state=$(ip neigh show "$ip" 2>/dev/null | awk '{ print $NF }')
 		[ "$name" = '*' ] && name=
-		json_add_object
-		json_add_string mac "$mac"
-		json_add_string ip "$ip"
-		json_add_string name "$name"
-		json_add_int lease_expires "$expires"
 		case "$state" in
-			REACHABLE|DELAY|PROBE|STALE) json_add_boolean online 1 ;;
-			*) json_add_boolean online 0 ;;
+			REACHABLE|DELAY|PROBE|STALE) online=1 ;;
+			*) online=0 ;;
 		esac
-		json_close_object
+		device "$mac" "$ip" "$name" "$expires" "$online"
+		seen="$seen$mac "
 	done < "$LEASES"
 fi
+# Blocked devices stay listed after their lease is gone, so they can be unblocked.
+for m in $blocked; do
+	case "$seen" in
+		*" $m "*) ;;
+		*) device "$m" '' '' 0 0 ;;
+	esac
+done
 json_close_array
 dash_send

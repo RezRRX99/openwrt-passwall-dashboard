@@ -20,7 +20,7 @@ A small bilingual (Persian and English) web dashboard for PassWall2 on OpenWrt. 
 - DNS leak protection: while the kill switch is armed, client DNS is redirected to the router, which resolves through PassWall while it runs.
 - AdGuard Home switch and reports: turn ad blocking on or off instantly and see query reports.
 - WebRTC and IP hiding switch: drops UDP STUN on every port, blocks client IPv6 and keeps the kill switch armed, which stops the usual ways a site learns the real IP. See the limits below.
-- Devices: the list of clients from the DHCP leases.
+- Devices: the list of clients from the DHCP leases, with a button to block one. A blocked device is pushed off Wi-Fi and gets no address, router access or internet until unblocked.
 - Wi-Fi and password settings: change network names and passwords, and the router root password.
 - Persian and English interface, right-to-left and left-to-right.
 - Dark and light "Liquid Glass" theme.

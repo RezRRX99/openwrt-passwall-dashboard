@@ -1,0 +1,48 @@
+#!/bin/sh
+# dash-block: drops everything a blocked device sends, by MAC address.
+#
+#   dash-block apply    match the firewall to dash.block.mac
+#
+# Runs at raw priority, ahead of PassWall and the kill switch, so a blocked device gets nothing
+# from the router: no address, no DNS, no dashboard and no internet. Only devices on br-lan are
+# matched. api-block also pushes the device off Wi-Fi, which ends its open connections, since
+# flow offloading would carry those past this rule.
+
+TABLE='inet dash_block'
+STAMP=/tmp/dash-block.applied
+
+want=$(uci -q get dash.block.mac | tr ' ' '\n' | grep -E '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$' | sort -u | tr '\n' ' ')
+want=${want% }
+
+case "$1" in
+	apply) ;;
+	*)
+		echo "usage: $0 apply" >&2
+		exit 1
+		;;
+esac
+
+if [ -z "$want" ]; then
+	nft delete table $TABLE 2>/dev/null
+	rm -f "$STAMP"
+	exit 0
+fi
+
+# Reloading every minute would reset the counters, so only a change reloads.
+[ "$(cat "$STAMP" 2>/dev/null)" = "$want" ] && nft list table $TABLE >/dev/null 2>&1 && exit 0
+
+nft -f - <<-EOF || exit 1
+	table $TABLE
+	delete table $TABLE
+	table $TABLE {
+		set macs {
+			type ether_addr
+			elements = { $(echo "$want" | sed 's/ /, /g') }
+		}
+		chain pre {
+			type filter hook prerouting priority raw - 10; policy accept;
+			iifname "br-lan" ether saddr @macs counter drop
+		}
+	}
+EOF
+echo "$want" > "$STAMP"

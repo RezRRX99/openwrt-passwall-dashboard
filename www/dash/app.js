@@ -1262,15 +1262,32 @@ function viewDevices(root, c) {
       var on = arr.filter(function (x) { return x.online; }).length;
       body.appendChild(el('p', { class: 'help count-line' }, t('dv_count', { n: num(on), m: num(arr.length) })));
       body.appendChild(el('ul', { class: 'surface list' }, arr.map(function (x) {
-        return el('li', { class: 'dev' }, [
+        var state = x.blocked ? el('span', { class: 'status blocked' }, [el('span', { class: 'dot' }), t('dv_blocked')])
+          : el('span', { class: 'status ' + (x.online ? 'on' : 'off') }, [el('span', { class: 'dot' }), t(x.online ? 'online' : 'offline')]);
+        return el('li', { class: 'dev', 'data-testid': 'dev-row', 'data-mac': x.mac }, [
           el('div', { class: 'rb-main' }, [
             el('span', { class: 'rb-name' }, x.name ? bdi(x.name) : t('dv_unknown')),
             el('span', { class: 'rb-meta dev-meta' }, [ltr(x.ip || '-'), ltr(x.mac || '-')])
           ]),
-          el('span', { class: 'status ' + (x.online ? 'on' : 'off') }, [el('span', { class: 'dot' }), t(x.online ? 'online' : 'offline')])
+          state,
+          x.self ? el('span', { class: 'chip', 'data-testid': 'dev-self' }, t('dv_self')) : blockBtn(x)
         ]);
       })));
     });
+  }
+  // Blocking pushes the device off Wi-Fi and drops everything it sends, until unblocked.
+  function blockBtn(x) {
+    var b = mkBtn(t(x.blocked ? 'dv_unblock' : 'dv_block'), 'secondary', null, async function () {
+      if (!x.blocked) {
+        var ok = await confirmBox(t('dv_block_t'), t('dv_block_d', { name: x.name || x.mac }), t('dv_block'), true);
+        if (!ok) return;
+      }
+      await api('api-block', { method: 'POST', body: { mac: x.mac, blocked: !x.blocked } });
+      toast(t(x.blocked ? 'dv_unblocked_ok' : 'dv_blocked_ok'), 'ok');
+      if (c.alive()) load();
+    });
+    b.setAttribute('data-testid', 'dev-block');
+    return b;
   }
   add(root, [viewTitle(t('nav_devices'), mkBtn(t('refresh'), 'secondary', 'refresh', function () { load(); })), body]);
   load();

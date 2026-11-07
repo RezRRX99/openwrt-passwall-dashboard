@@ -1,0 +1,53 @@
+#!/bin/sh
+# api-block: blocks a LAN device by MAC address, or lifts the block. Requires a session.
+#
+# GET  /cgi-bin/api-block                                    {"ok":true,"blocked":["aa:.."]}
+# POST /cgi-bin/api-block   {"mac":"aa:bb:cc:dd:ee:ff","blocked":true}
+#
+# A blocked device is pushed off Wi-Fi at once, and dash-block drops everything it sends, so it
+# gets nothing even if it joins again. The device sending the request cannot block itself, so
+# the owner never locks themselves out.
+
+. /usr/lib/dash/dash-lib.sh
+dash_require_session
+
+if [ "$REQUEST_METHOD" = POST ]; then
+	dash_read_body
+	mac=$(dash_field mac | tr 'A-F' 'a-f')
+	printf '%s' "$mac" | grep -qE '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$' || dash_fail bad_mac
+	case "$mac" in
+		00:00:00:00:00:00|ff:ff:ff:ff:ff:ff) dash_fail bad_mac ;;
+	esac
+	case "$(dash_field blocked)" in
+		true) on=1 ;;
+		false) on=0 ;;
+		*) dash_fail bad_action ;;
+	esac
+
+	if [ "$on" = 1 ]; then
+		self=$(ip neigh show "$REMOTE_ADDR" 2>/dev/null | awk '/lladdr/ { print $5; exit }')
+		[ "$self" = "$mac" ] && dash_fail self_block '409 Conflict'
+	fi
+
+	[ -f /etc/config/dash ] || touch /etc/config/dash
+	uci -q get dash.block >/dev/null || uci set dash.block=block
+	uci -q del_list "dash.block.mac=$mac"
+	[ "$on" = 1 ] && uci add_list "dash.block.mac=$mac"
+	uci commit dash
+	/usr/lib/dash/dash-block apply || dash_fail block_failed '500 Internal Server Error'
+
+	if [ "$on" = 1 ]; then
+		for ap in $(ubus list 'hostapd.*' 2>/dev/null); do
+			ubus call "$ap" del_client "{\"addr\":\"$mac\",\"reason\":5,\"deauth\":true,\"ban_time\":10000}" >/dev/null 2>&1
+		done
+	fi
+fi
+
+json_init
+json_add_boolean ok 1
+json_add_array blocked
+for m in $(uci -q get dash.block.mac); do
+	json_add_string '' "$m"
+done
+json_close_array
+dash_send

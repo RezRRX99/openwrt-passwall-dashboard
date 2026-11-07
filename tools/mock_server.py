@@ -140,9 +140,14 @@ def get_route(name, query):
             {"id": "default_radio0", "ssid": "OpenWrt 2G", "band": "2g", "network": "lan", "enabled": True},
             {"id": "wifinet2", "ssid": "OpenWrt Guest", "band": "5g", "network": "guest", "enabled": True}]}
     if name == "api-devices":
+        blocked = world.setdefault("blocked", [])
         return {"ok": True, "devices": [
-            {"mac": "aa:bb:cc:00:11:22", "ip": "192.168.1.102", "name": "laptop", "online": True, "lease_expires": 0},
-            {"mac": "aa:bb:cc:00:11:33", "ip": "192.168.1.140", "name": "", "online": False, "lease_expires": 0}]}
+            {"mac": "aa:bb:cc:00:11:22", "ip": "192.168.1.102", "name": "laptop", "online": True, "lease_expires": 0,
+             "blocked": "aa:bb:cc:00:11:22" in blocked, "self": True},
+            {"mac": "aa:bb:cc:00:11:33", "ip": "192.168.1.140", "name": "", "online": False, "lease_expires": 0,
+             "blocked": "aa:bb:cc:00:11:33" in blocked}]}
+    if name == "api-block":
+        return {"ok": True, "blocked": world.setdefault("blocked", [])}
     return {"ok": True}
 
 
@@ -152,6 +157,13 @@ def post_route(name, body):
     elif name == "api-switch":
         world["active"] = body["id"]
         return {"ok": True, "active": body["id"], "restarting": False}
+    elif name == "api-block":
+        blocked = world.setdefault("blocked", [])
+        if body["blocked"] and body["mac"] not in blocked:
+            blocked.append(body["mac"])
+        if not body["blocked"] and body["mac"] in blocked:
+            blocked.remove(body["mac"])
+        return get_route(name, "")
     elif name == "api-logout":
         return {"ok": True}
     elif name == "api-webrtc":
@@ -200,7 +212,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(posts)
         if path == "/__reset":
             posts.clear()
-            world.update(state=STATE, active="bal1", ks=True, mode="smart", ab=True, rtc=False)
+            world.update(state=STATE, active="bal1", ks=True, mode="smart", ab=True, rtc=False, blocked=[])
             return self.send_json({"ok": True})
         if path.startswith("/cgi-bin/"):
             name = path.rsplit("/", 1)[-1]

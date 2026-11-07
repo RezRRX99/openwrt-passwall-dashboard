@@ -30,6 +30,7 @@ keep_pool_complete() {
 # First, because ad blocking works with PassWall off too.
 /usr/lib/dash/dash-adblock apply >/dev/null 2>&1
 /usr/lib/dash/dash-rtc apply >/dev/null 2>&1
+/usr/lib/dash/dash-block apply >/dev/null 2>&1
 
 dash_passwall_enabled || { rm -f "$MISSED"; exit 0; }
 

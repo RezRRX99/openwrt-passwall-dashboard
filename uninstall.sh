@@ -21,7 +21,7 @@ fi
 [ -x /usr/lib/dash/dash-rtc ] && /usr/lib/dash/dash-rtc apply
 
 # 2. Firewall tables of the dashboard.
-for t in dash_ks dash_ab dash_rtc; do
+for t in dash_ks dash_ab dash_rtc dash_block; do
 	nft delete table inet "$t" 2>/dev/null
 done
 

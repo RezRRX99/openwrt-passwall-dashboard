@@ -7,4 +7,5 @@ START=18
 start() {
 	/usr/lib/dash/dash-ks apply
 	/usr/lib/dash/dash-rtc apply
+	/usr/lib/dash/dash-block apply
 }
